@@ -45,7 +45,7 @@ uniform float clip_radius_bottom_left;
 uniform float clip_radius_bottom_right;
 #endif
 
-uniform bool discard_transparent;
+uniform float discard_transparent;
 
 vec4 sample_texture() {
 #if SOURCE == SOURCE_TEXTURE_RGBA || SOURCE == SOURCE_TEXTURE_EXTERNAL
@@ -88,7 +88,7 @@ void main() {
 	gl_FragColor = sample_texture() * alpha;
 #endif
 
-	if (discard_transparent && gl_FragColor.a == 0.0) {
+	if (gl_FragColor.a < discard_transparent) {
 		discard;
 	}
 }

@@ -178,6 +178,7 @@ struct wlr_scene_blur {
 
 	float strength;
 	float alpha;
+	float ignore_alpha;
 
 	bool should_only_blur_bottom_layer;
 
@@ -669,6 +670,13 @@ void wlr_scene_blur_set_alpha(struct wlr_scene_blur *blur, float alpha);
  * fade-out effect.
  */
 void wlr_scene_blur_set_strength(struct wlr_scene_blur *blur, float strength);
+
+/**
+ * Skip blurring pixels whose transparency-mask alpha is below this threshold
+ * (0.0..1.0). 0.0 blurs the whole node box. Only effective when a
+ * transparency mask source is set. Default 0.0.
+ */
+void wlr_scene_blur_set_ignore_alpha(struct wlr_scene_blur *blur, float ignore_alpha);
 
 /**
  * Sets the region where to clip the blur.

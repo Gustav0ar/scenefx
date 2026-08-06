@@ -27,7 +27,7 @@ struct fx_render_texture_options fx_render_texture_options_default(
 		const struct wlr_render_texture_options *base) {
 	struct fx_render_texture_options options = {
 		.corners = {0},
-		.discard_transparent = false,
+		.discard_transparent = 0.0f,
 		.clip_box = NULL,
 		.clipped_region = {0},
 	};
@@ -1041,7 +1041,7 @@ static struct fx_framebuffer *get_main_buffer_blur(struct fx_gles_render_pass *p
 			fx_options->tex_options.base.src_box.height,
 			fx_options->tex_options.base.src_box.x,
 			fx_options->tex_options.base.src_box.y);
-	TRACY_ZONE_TEXT_f("Ignore Transparent: %d", fx_options->ignore_transparent);
+	TRACY_ZONE_TEXT_f("Ignore Alpha: %f", fx_options->ignore_alpha);
 	TRACY_ZONE_TEXT_f("Discard Transparent: %d", fx_options->tex_options.discard_transparent);
 	TRACY_ZONE_TEXT_f("Use Optimized Blur: %d", fx_options->use_optimized_blur);
 	TRACY_ZONE_TEXT_f("Blur Options:");
@@ -1136,11 +1136,11 @@ void fx_render_pass_add_blur(struct fx_gles_render_pass *pass,
 	struct fx_texture *blur_texture = fx_get_texture(wlr_texture);
 
 	// Get a stencil of the window ignoring transparent regions
-	if (fx_options->ignore_transparent && fx_options->tex_options.base.texture) {
+	if (fx_options->ignore_alpha > 0.0f && fx_options->tex_options.base.texture) {
 		stencil_mask_init();
 
 		struct fx_render_texture_options tex_options = fx_options->tex_options;
-		tex_options.discard_transparent = true;
+		tex_options.discard_transparent = fx_options->ignore_alpha;
 		tex_options.clipped_region = fx_options->clipped_region;
 		fx_render_pass_add_texture(pass, &tex_options);
 
@@ -1169,7 +1169,7 @@ void fx_render_pass_add_blur(struct fx_gles_render_pass *pass,
 	wlr_texture_destroy(&blur_texture->wlr_texture);
 
 	// Finish stenciling
-	if (fx_options->ignore_transparent && fx_options->tex_options.base.texture) {
+	if (fx_options->ignore_alpha > 0.0f && fx_options->tex_options.base.texture) {
 		stencil_mask_fini();
 	}
 
@@ -1203,7 +1203,7 @@ bool fx_render_pass_add_optimized_blur(struct fx_gles_render_pass *pass,
 			fx_options->tex_options.base.src_box.height,
 			fx_options->tex_options.base.src_box.x,
 			fx_options->tex_options.base.src_box.y);
-	TRACY_ZONE_TEXT_f("Ignore Transparent: %d", fx_options->ignore_transparent);
+	TRACY_ZONE_TEXT_f("Ignore Alpha: %f", fx_options->ignore_alpha);
 	TRACY_ZONE_TEXT_f("Discard Transparent: %d", fx_options->tex_options.discard_transparent);
 	TRACY_ZONE_TEXT_f("Use Optimized Blur: %d", fx_options->use_optimized_blur);
 	TRACY_ZONE_TEXT_f("Blur Options:");

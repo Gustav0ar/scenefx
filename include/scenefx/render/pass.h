@@ -45,7 +45,7 @@ struct fx_render_texture_options {
 	struct wlr_render_texture_options base;
 	const struct wlr_box *clip_box; // Used to clip csd. Ignored if NULL
 	struct fx_corner_fradii corners;
-	bool discard_transparent;
+	float discard_transparent; // discard pixels with alpha < this; 0.0 discards nothing
 	struct clipped_fregion clipped_region;
 };
 
@@ -87,7 +87,7 @@ struct fx_render_blur_pass_options {
 	struct fx_framebuffer *current_buffer;
 	struct blur_data *blur_data;
 	bool use_optimized_blur;
-	bool ignore_transparent;
+	float ignore_alpha; // 0.0 = blur whole box; >0 = skip pixels with mask alpha < value
 	float blur_strength;
 	struct fx_corner_fradii corners;
 	struct clipped_fregion clipped_region;
