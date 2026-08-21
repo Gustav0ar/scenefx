@@ -3349,8 +3349,7 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
 
 	struct fx_gles_render_pass *fx_pass = fx_get_render_pass(render_pass);
 	bool should_compensate_blur = false;
-	if (fx_render_pass_init_offscreen_buffers(render_pass, output)
-			&& pixman_region32_not_empty(&render_data.damage)) {
+	if (pixman_region32_not_empty(&render_data.damage)) {
 		// Blur artifact prevention
 		// Note: Supports individual blur node blur_data
 		pixman_region32_t original_damage;
@@ -3402,7 +3401,7 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
 
 		// Expand the damage to compensate for blur
 		if (should_compensate_blur) {
-			// Capture the padding pixels around the blur where artifacts will be drawn
+			// Compute the padding pixels around the blur where artifacts will be drawn
 			pixman_region32_subtract(&fx_pass->blur_padding_region,
 					&blur_padding_region, &render_data.damage);
 			// Make sure that the padding and damage doesn't exceed the output bounds
@@ -3415,17 +3414,22 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
 			pixman_region32_intersect_rect(&render_data.damage, &render_data.damage,
 					0, 0, output->width, output->height);
 
-			// Copy the surrounding content where the blur would display artifacts
-			// and draw it above the artifacts. Otherwise The old rendered
-			// content would be included into the new blur. This means that
-			// content like a high z-index toplevel would be included into the
-			// blur of a toplevel with a low z-index.
-			fx_render_pass_read_to_buffer(fx_pass, &fx_pass->blur_padding_region,
-					fx_pass->fx_offscreen_buffers->blur_saved_pixels_buffer, fx_pass->buffer);
 		}
 
 		pixman_region32_fini(&blur_padding_region);
 		pixman_region32_fini(&original_damage);
+	}
+
+	if (fx_pass->has_blur
+			&& !fx_render_pass_init_offscreen_buffers(render_pass, output)) {
+		fx_pass->has_blur = false;
+		should_compensate_blur = false;
+	}
+	if (should_compensate_blur) {
+		// Capture the padding pixels around the blur where artifacts will be drawn
+		// and draw them back after rendering the scene.
+		fx_render_pass_read_to_buffer(fx_pass, &fx_pass->blur_padding_region,
+				fx_pass->fx_offscreen_buffers->blur_saved_pixels_buffer, fx_pass->buffer);
 	}
 
 	pixman_region32_t background;

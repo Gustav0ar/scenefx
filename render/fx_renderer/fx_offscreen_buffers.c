@@ -52,6 +52,22 @@ void fx_offscreen_buffers_destroy(struct fx_offscreen_buffers *fbos) {
 	addon_handle_destroy(&fbos->addon);
 }
 
+void fx_renderer_clear_output_effect_buffers(struct wlr_output *output) {
+	if (output == NULL) {
+		return;
+	}
+
+	struct wlr_addon *addon = wlr_addon_find(&output->addons, output,
+			&fbos_addon_impl);
+	if (addon == NULL) {
+		return;
+	}
+
+	struct fx_offscreen_buffers *fbos =
+		wl_container_of(addon, fbos, addon);
+	fx_offscreen_buffers_destroy(fbos);
+}
+
 struct fx_offscreen_buffers *fx_offscreen_buffers_try_get(struct wlr_output *output) {
 	struct fx_offscreen_buffers *fbos = NULL;
 	if (!output) {
