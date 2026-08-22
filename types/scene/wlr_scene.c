@@ -249,11 +249,49 @@ struct wlr_scene_tree *wlr_scene_tree_create(struct wlr_scene_tree *parent) {
 	return tree;
 }
 
-typedef bool (*scene_node_box_iterator_func_t)(struct wlr_scene_node *node,
-	int sx, int sy, void *data);
+// Per-tree clip, kept out of line: struct wlr_scene embeds wlr_scene_tree by
+// value, so growing that struct would move every wlr_scene member that follows
+// it out from under the scene helpers a compositor links from wlroots proper.
+struct scene_tree_clip {
+	struct wlr_addon addon;
+	struct wlr_box box;
+};
 
+static void scene_tree_clip_addon_destroy(struct wlr_addon *addon) {
+	struct scene_tree_clip *clip = wl_container_of(addon, clip, addon);
+	wlr_addon_finish(&clip->addon);
+	free(clip);
+}
+
+static const struct wlr_addon_interface scene_tree_clip_addon_impl = {
+	.name = "scene_tree_clip",
+	.destroy = scene_tree_clip_addon_destroy,
+};
+
+// NULL when the tree is unclipped. The impl doubles as the addon owner: there is
+// exactly one clip per tree.
+static struct scene_tree_clip *scene_tree_clip_try_get(struct wlr_scene_tree *tree) {
+	struct wlr_addon *addon = wlr_addon_find(&tree->node.addons,
+		&scene_tree_clip_addon_impl, &scene_tree_clip_addon_impl);
+	if (addon == NULL) {
+		return NULL;
+	}
+
+	struct scene_tree_clip *clip = wl_container_of(addon, clip, addon);
+	return clip;
+}
+
+typedef bool (*scene_node_box_iterator_func_t)(struct wlr_scene_node *node,
+	int sx, int sy, const struct wlr_box *acc_clip, void *data);
+
+// acc_clip is the intersection of the clips of every tree above node, in layout
+// coordinates, or NULL when no ancestor is clipped. A non-NULL box with zero
+// area means the node is fully clipped away. The search box is never narrowed by
+// the clip: the visibility walk has to reach descendants that just left the clip
+// in order to clear their visible region.
 static bool _scene_nodes_in_box(struct wlr_scene_node *node, struct wlr_box *box,
-		scene_node_box_iterator_func_t iterator, void *user_data, int lx, int ly) {
+		scene_node_box_iterator_func_t iterator, void *user_data, int lx, int ly,
+		const struct wlr_box *acc_clip) {
 	if (!node->enabled) {
 		return false;
 	}
@@ -261,9 +299,24 @@ static bool _scene_nodes_in_box(struct wlr_scene_node *node, struct wlr_box *box
 	switch (node->type) {
 	case WLR_SCENE_NODE_TREE:;
 		struct wlr_scene_tree *scene_tree = wlr_scene_tree_from_node(node);
+
+		struct wlr_box tree_clip;
+		struct scene_tree_clip *clip = scene_tree_clip_try_get(scene_tree);
+		if (clip != NULL) {
+			tree_clip = clip->box;
+			tree_clip.x += lx;
+			tree_clip.y += ly;
+			if (acc_clip != NULL &&
+					!wlr_box_intersection(&tree_clip, &tree_clip, acc_clip)) {
+				tree_clip = (struct wlr_box){0};
+			}
+			acc_clip = &tree_clip;
+		}
+
 		struct wlr_scene_node *child;
 		wl_list_for_each_reverse(child, &scene_tree->children, link) {
-			if (_scene_nodes_in_box(child, box, iterator, user_data, lx + child->x, ly + child->y)) {
+			if (_scene_nodes_in_box(child, box, iterator, user_data,
+					lx + child->x, ly + child->y, acc_clip)) {
 				return true;
 			}
 		}
@@ -277,7 +330,7 @@ static bool _scene_nodes_in_box(struct wlr_scene_node *node, struct wlr_box *box
 		scene_node_get_size(node, &node_box.width, &node_box.height);
 
 		if (wlr_box_intersection(&node_box, &node_box, box) &&
-				iterator(node, lx, ly, user_data)) {
+				iterator(node, lx, ly, acc_clip, user_data)) {
 			return true;
 		}
 		break;
@@ -286,12 +339,45 @@ static bool _scene_nodes_in_box(struct wlr_scene_node *node, struct wlr_box *box
 	return false;
 }
 
+// Seeds the accumulated clip for a walk that starts below the scene root, so
+// clips set on trees above node still apply.
+static bool scene_node_ancestor_clip(struct wlr_scene_node *node,
+		int lx, int ly, struct wlr_box *acc) {
+	struct wlr_scene_tree *parent = node->parent;
+	if (parent == NULL) {
+		return false;
+	}
+
+	int plx = lx - node->x;
+	int ply = ly - node->y;
+	bool clipped = scene_node_ancestor_clip(&parent->node, plx, ply, acc);
+	struct scene_tree_clip *parent_clip = scene_tree_clip_try_get(parent);
+	if (parent_clip == NULL) {
+		return clipped;
+	}
+
+	struct wlr_box clip = parent_clip->box;
+	clip.x += plx;
+	clip.y += ply;
+	if (!clipped) {
+		*acc = clip;
+	} else if (!wlr_box_intersection(acc, acc, &clip)) {
+		*acc = (struct wlr_box){0};
+	}
+
+	return true;
+}
+
 static bool scene_nodes_in_box(struct wlr_scene_node *node, struct wlr_box *box,
 		scene_node_box_iterator_func_t iterator, void *user_data) {
 	int x, y;
 	wlr_scene_node_coords(node, &x, &y);
 
-	return _scene_nodes_in_box(node, box, iterator, user_data, x, y);
+	struct wlr_box acc_clip;
+	bool clipped = scene_node_ancestor_clip(node, x, y, &acc_clip);
+
+	return _scene_nodes_in_box(node, box, iterator, user_data, x, y,
+		clipped ? &acc_clip : NULL);
 }
 
 static pixman_region32_t create_corner_location_region(struct fx_corner_radii corners, int x, int y, int width, int height) {
@@ -674,7 +760,7 @@ static void restack_xwayland_surface(struct wlr_scene_node *node,
 #endif
 
 static bool scene_node_update_iterator(struct wlr_scene_node *node,
-		int lx, int ly, void *_data) {
+		int lx, int ly, const struct wlr_box *acc_clip, void *_data) {
 	struct scene_update_data *data = _data;
 
 	if (node->type == WLR_SCENE_NODE_OPTIMIZED_BLUR) {
@@ -696,10 +782,23 @@ static bool scene_node_update_iterator(struct wlr_scene_node *node,
 	pixman_region32_intersect_rect(&node->visible, &node->visible,
 		lx, ly, box.width, box.height);
 
+	if (acc_clip != NULL) {
+		// An ancestor tree clips this node. Folding the clip into the visible
+		// region contains rendering, damage, output membership, frame callbacks
+		// and dmabuf feedback in one place.
+		pixman_region32_intersect_rect(&node->visible, &node->visible,
+			acc_clip->x, acc_clip->y, acc_clip->width, acc_clip->height);
+	}
+
 	if (data->calculate_visibility) {
 		pixman_region32_t opaque;
 		pixman_region32_init(&opaque);
 		scene_node_opaque_region(node, lx, ly, &opaque);
+		if (acc_clip != NULL) {
+			// Clipped away opaque content must not cull nodes below it.
+			pixman_region32_intersect_rect(&opaque, &opaque,
+				acc_clip->x, acc_clip->y, acc_clip->width, acc_clip->height);
+		}
 		pixman_region32_subtract(data->visible, data->visible, &opaque);
 		pixman_region32_fini(&opaque);
 	}
@@ -861,6 +960,34 @@ static void scene_node_update(struct wlr_scene_node *node,
 	scene_node_visibility(node, damage);
 	scene_damage_outputs(scene, damage);
 	pixman_region32_fini(damage);
+}
+
+void wlr_scene_tree_set_clip(struct wlr_scene_tree *tree, const struct wlr_box *box) {
+	struct wlr_box new_clip = box != NULL ? *box : (struct wlr_box){0};
+	struct scene_tree_clip *clip = scene_tree_clip_try_get(tree);
+
+	if (wlr_box_empty(&new_clip)) {
+		if (clip == NULL) {
+			return;
+		}
+		scene_tree_clip_addon_destroy(&clip->addon);
+	} else if (clip != NULL) {
+		if (wlr_box_equal(&clip->box, &new_clip)) {
+			return;
+		}
+		clip->box = new_clip;
+	} else {
+		clip = calloc(1, sizeof(*clip));
+		if (clip == NULL) {
+			wlr_log(WLR_ERROR, "Failed to allocate scene tree clip");
+			return;
+		}
+		clip->box = new_clip;
+		wlr_addon_init(&clip->addon, &tree->node.addons,
+			&scene_tree_clip_addon_impl, &scene_tree_clip_addon_impl);
+	}
+
+	scene_node_update(&tree->node, NULL);
 }
 
 struct wlr_scene_rect *wlr_scene_rect_create(struct wlr_scene_tree *parent,
@@ -1891,8 +2018,14 @@ struct node_at_data {
 };
 
 static bool scene_node_at_iterator(struct wlr_scene_node *node,
-		int lx, int ly, void *data) {
+		int lx, int ly, const struct wlr_box *acc_clip, void *data) {
 	struct node_at_data *at_data = data;
+
+	if (acc_clip != NULL &&
+			!wlr_box_contains_point(acc_clip, at_data->lx, at_data->ly)) {
+		// Clipped away: the point falls through to whatever is below.
+		return false;
+	}
 
 	double rx = at_data->lx - lx;
 	double ry = at_data->ly - ly;
@@ -2661,7 +2794,7 @@ static bool scene_rect_is_black_opaque(struct wlr_scene_rect *scene_rect) {
 }
 
 static bool construct_render_list_iterator(struct wlr_scene_node *node,
-		int lx, int ly, void *_data) {
+		int lx, int ly, const struct wlr_box *acc_clip, void *_data) {
 	struct render_list_constructor_data *data = _data;
 
 	if (scene_node_invisible(node)) {
@@ -2802,6 +2935,21 @@ static enum scene_direct_scanout_result scene_entry_try_direct_scanout(
 	}
 
 	if (node->type != WLR_SCENE_NODE_BUFFER) {
+		return SCANOUT_INELIGIBLE;
+	}
+
+	// Direct scanout bypasses node->visible, so a node cropped by an ancestor
+	// tree clip has to be composited instead. A no-op clip leaves the visible
+	// region covering the whole node, which stays eligible.
+	struct wlr_box node_box = { .x = entry->x, .y = entry->y };
+	scene_node_get_size(node, &node_box.width, &node_box.height);
+
+	pixman_region32_t node_region;
+	pixman_region32_init_rect(&node_region, node_box.x, node_box.y,
+		node_box.width, node_box.height);
+	bool fully_visible = pixman_region32_equal(&node_region, &node->visible);
+	pixman_region32_fini(&node_region);
+	if (!fully_visible) {
 		return SCANOUT_INELIGIBLE;
 	}
 

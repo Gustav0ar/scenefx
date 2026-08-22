@@ -94,7 +94,17 @@ enum wlr_scene_debug_damage_option {
 	WLR_SCENE_DEBUG_DAMAGE_HIGHLIGHT
 };
 
-/** A sub-tree in the scene-graph. */
+/**
+ * A sub-tree in the scene-graph.
+ *
+ * Do not add members here. struct wlr_scene embeds this struct by value, so its
+ * size decides the offset of every following wlr_scene member. Compositors link
+ * scene helpers from wlroots proper (wlr_scene_subsurface_tree_create,
+ * wlr_scene_xdg_surface_create), and those were compiled against wlroots' own
+ * definition. Growing this struct silently repoints their reads of
+ * wlr_scene.outputs and friends. Per-tree state goes in a wlr_addon on
+ * wlr_scene_tree.node instead, as wlr_scene_tree_set_clip does.
+ */
 struct wlr_scene_tree {
 	struct wlr_scene_node node;
 
@@ -462,6 +472,19 @@ void wlr_scene_set_color_manager_v1(struct wlr_scene *scene, struct wlr_color_ma
  * Add a node displaying nothing but its children.
  */
 struct wlr_scene_tree *wlr_scene_tree_create(struct wlr_scene_tree *parent);
+
+/**
+ * Set the rectangular clip of a scene tree, in coordinates local to the tree.
+ *
+ * Pass NULL or an empty box to remove the clip. Descendants are constrained to
+ * the intersection of every clip above them.
+ *
+ * The clip is a pure scissor: it constrains rendering, damage, output
+ * membership (enter/leave), frame callbacks and hit testing of every
+ * descendant, and it never resizes or rescales a buffer, so src_box and
+ * dest_size are untouched. It is stored in a wlr_addon on the tree's node.
+ */
+void wlr_scene_tree_set_clip(struct wlr_scene_tree *tree, const struct wlr_box *clip);
 
 /**
  * Add a node displaying a single surface to the scene-graph.
