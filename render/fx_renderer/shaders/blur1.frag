@@ -1,6 +1,10 @@
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
 precision mediump float;
+#endif
 
-varying mediump vec2 v_texcoord;
+varying highp vec2 v_texcoord;
 uniform sampler2D tex;
 
 uniform float radius;

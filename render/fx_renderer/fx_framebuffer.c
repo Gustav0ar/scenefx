@@ -121,10 +121,27 @@ void fx_framebuffer_get_or_create_custom(struct fx_renderer *renderer,
 		return;
 	}
 	(*fx_framebuffer)->owned = true;
-	if (fx_framebuffer_get_fbo(*fx_framebuffer) == 0) {
+	GLuint fbo = fx_framebuffer_get_fbo(*fx_framebuffer);
+	if (fbo == 0) {
 		wlr_buffer_drop(wlr_buffer);
 		*fx_framebuffer = NULL;
 		*failed = true;
+		return;
+	}
+
+	// Allocated DMA-BUF contents are undefined. This is especially visible
+	// with FP16 effect buffers, where a blur kernel can spread extreme values
+	// far beyond the region that has been rendered so far.
+	GLboolean scissor_enabled = glIsEnabled(GL_SCISSOR_TEST);
+	GLfloat clear_color[4];
+	glGetFloatv(GL_COLOR_CLEAR_VALUE, clear_color);
+	glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+	glDisable(GL_SCISSOR_TEST);
+	glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+	glClear(GL_COLOR_BUFFER_BIT);
+	glClearColor(clear_color[0], clear_color[1], clear_color[2], clear_color[3]);
+	if (scissor_enabled) {
+		glEnable(GL_SCISSOR_TEST);
 	}
 }
 
