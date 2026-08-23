@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <math.h>
 #include <pixman.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -2255,6 +2256,11 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 		struct wlr_color_luminances src_lum, srgb_lum;
 		wlr_color_transfer_function_get_default_luminance(
 			scene_buffer->transfer_function, &src_lum);
+		if (scene_buffer->transfer_function ==
+				WLR_COLOR_TRANSFER_FUNCTION_ST2084_PQ &&
+				data->output->sdr_white_level > 0.0f) {
+			src_lum.reference = data->output->sdr_white_level;
+		}
 		wlr_color_transfer_function_get_default_luminance(
 			WLR_COLOR_TRANSFER_FUNCTION_SRGB, &srgb_lum);
 		float luminance_multiplier = get_luminance_multiplier(&src_lum, &srgb_lum);
@@ -2746,6 +2752,18 @@ void wlr_scene_output_set_position(struct wlr_scene_output *scene_output,
 	scene_output_update_geometry(scene_output, false);
 }
 
+void wlr_scene_output_set_sdr_white_level(
+		struct wlr_scene_output *scene_output, float nits) {
+	assert(isfinite(nits) && nits >= 0.0f);
+	if (scene_output->sdr_white_level == nits) {
+		return;
+	}
+
+	scene_output->sdr_white_level = nits;
+	scene_output->color_transform_dirty = true;
+	scene_output_damage_whole(scene_output);
+}
+
 static bool scene_node_invisible(struct wlr_scene_node *node) {
 	if (node->type == WLR_SCENE_NODE_TREE) {
 		return true;
@@ -3213,6 +3231,11 @@ static bool scene_output_combine_color_transforms(
 		wlr_color_transfer_function_get_default_luminance(
 			WLR_COLOR_TRANSFER_FUNCTION_SRGB, &srgb_lum);
 		wlr_color_transfer_function_get_default_luminance(img_desc->transfer_function, &dst_lum);
+		if (img_desc->transfer_function ==
+				WLR_COLOR_TRANSFER_FUNCTION_ST2084_PQ &&
+				scene_output->sdr_white_level > 0.0f) {
+			dst_lum.reference = scene_output->sdr_white_level;
+		}
 		float luminance_multiplier = get_luminance_multiplier(&srgb_lum, &dst_lum);
 		for (int i = 0; i < 9; ++i) {
 			matrix[i] *= luminance_multiplier;
@@ -3255,6 +3278,7 @@ static bool scene_output_combine_color_transforms(
 	scene_output->prev_supplied_color_transform = supplied ? wlr_color_transform_ref(supplied) : NULL;
 	wlr_color_transform_unref(scene_output->combined_color_transform);
 	scene_output->combined_color_transform = combined;
+	scene_output->color_transform_dirty = false;
 
 	result = true;
 
@@ -3468,6 +3492,7 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
 	if ((render_gamma_lut
 			&& scene_output->gamma_lut_color_transform != scene_output->prev_gamma_lut_color_transform)
 			|| scene_output->prev_supplied_color_transform != options->color_transform
+			|| scene_output->color_transform_dirty
 			|| (state->committed & WLR_OUTPUT_STATE_IMAGE_DESCRIPTION)) {
 		const struct wlr_output_image_description *output_description =
 			output_pending_image_description(output, state);

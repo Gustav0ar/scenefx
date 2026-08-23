@@ -319,6 +319,8 @@ struct wlr_scene_output {
 		struct wlr_color_transform *prev_gamma_lut_color_transform;
 		struct wlr_color_transform *prev_supplied_color_transform;
 		struct wlr_color_transform *combined_color_transform;
+		float sdr_white_level;
+		bool color_transform_dirty;
 
 		struct wl_listener output_commit;
 		struct wl_listener output_damage;
@@ -881,6 +883,15 @@ void wlr_scene_output_destroy(struct wlr_scene_output *scene_output);
  */
 void wlr_scene_output_set_position(struct wlr_scene_output *scene_output,
 	int lx, int ly);
+
+/**
+ * Set the SDR white level used for PQ input and output normalization.
+ *
+ * A value of zero selects the transfer function's default reference
+ * luminance.
+ */
+void wlr_scene_output_set_sdr_white_level(
+	struct wlr_scene_output *scene_output, float nits);
 
 struct wlr_scene_output_state_options {
 	struct wlr_scene_timer *timer;
