@@ -242,8 +242,8 @@ bool link_quad_grad_round_program(struct quad_grad_round_shader *shader, int max
 
 bool link_tex_program(struct tex_shader *shader, enum fx_tex_shader_source source,
 		bool effects) {
-	GLchar frag_src_part[4096];
-	GLchar frag_src[8192];
+	GLchar frag_src_part[8192];
+	GLchar frag_src[12288];
 	snprintf(frag_src_part, sizeof(frag_src_part),
 		tex_frag_src, source, effects);
 	snprintf(frag_src, sizeof(frag_src),
@@ -258,6 +258,10 @@ bool link_tex_program(struct tex_shader *shader, enum fx_tex_shader_source sourc
 	shader->proj = glGetUniformLocation(prog, "proj");
 	shader->tex = glGetUniformLocation(prog, "tex");
 	shader->alpha = glGetUniformLocation(prog, "alpha");
+	shader->source_tf = glGetUniformLocation(prog, "source_tf");
+	shader->primaries_matrix = glGetUniformLocation(prog, "primaries_matrix");
+	shader->lum_multiplier = glGetUniformLocation(prog, "lum_multiplier");
+	shader->encode_srgb = glGetUniformLocation(prog, "encode_srgb");
 	shader->pos_attrib = glGetAttribLocation(prog, "pos");
 	shader->tex_proj = glGetUniformLocation(prog, "tex_proj");
 

@@ -11,6 +11,7 @@
 #include <wlr/util/log.h>
 #include <wlr/util/region.h>
 
+#include "render/color.h"
 #include "render/egl.h"
 #include "render/fx_renderer/fx_renderer.h"
 #include "render/fx_renderer/shaders.h"
@@ -348,6 +349,26 @@ static bool apply_clip_region(pixman_region32_t *clip_region,
 	return false;
 }
 
+static bool color_primaries_equal(const struct wlr_color_primaries *a,
+		const struct wlr_color_primaries *b) {
+	return a->red.x == b->red.x && a->red.y == b->red.y &&
+		a->green.x == b->green.x && a->green.y == b->green.y &&
+		a->blue.x == b->blue.x && a->blue.y == b->blue.y &&
+		a->white.x == b->white.x && a->white.y == b->white.y;
+}
+
+static void transpose_color_matrix(float out[static 9], const float matrix[static 9]) {
+	out[0] = matrix[0];
+	out[1] = matrix[3];
+	out[2] = matrix[6];
+	out[3] = matrix[1];
+	out[4] = matrix[4];
+	out[5] = matrix[7];
+	out[6] = matrix[2];
+	out[7] = matrix[5];
+	out[8] = matrix[8];
+}
+
 void fx_render_pass_add_texture(struct fx_gles_render_pass *pass,
 		const struct fx_render_texture_options *fx_options) {
 	const struct wlr_render_texture_options *options = &fx_options->base;
@@ -474,6 +495,35 @@ void fx_render_pass_add_texture(struct fx_gles_render_pass *pass,
 
 	glUniform1i(shader->tex, 0);
 	glUniform1f(shader->alpha, alpha);
+
+	struct wlr_color_primaries primaries_srgb;
+	wlr_color_primaries_from_named(&primaries_srgb, WLR_COLOR_NAMED_PRIMARIES_SRGB);
+	const float lum_multiplier = options->luminance_multiplier != NULL
+		? *options->luminance_multiplier
+		: 1.0f;
+	const bool primaries_passthrough = options->primaries == NULL ||
+		color_primaries_equal(options->primaries, &primaries_srgb);
+	const bool color_passthrough = !pass->has_color_transform &&
+		(options->transfer_function == 0 ||
+		 options->transfer_function == WLR_COLOR_TRANSFER_FUNCTION_SRGB) &&
+		primaries_passthrough && lum_multiplier == 1.0f;
+	const enum wlr_color_transfer_function source_tf = options->transfer_function != 0
+		? options->transfer_function
+		: WLR_COLOR_TRANSFER_FUNCTION_SRGB;
+
+	float primaries_matrix[9];
+	if (primaries_passthrough) {
+		wlr_matrix_identity(primaries_matrix);
+	} else {
+		float matrix[9];
+		wlr_color_primaries_transform_absolute_colorimetric(
+			options->primaries, &primaries_srgb, matrix);
+		transpose_color_matrix(primaries_matrix, matrix);
+	}
+	glUniform1i(shader->source_tf, color_passthrough ? 0 : source_tf);
+	glUniformMatrix3fv(shader->primaries_matrix, 1, GL_FALSE, primaries_matrix);
+	glUniform1f(shader->lum_multiplier, lum_multiplier);
+	glUniform1i(shader->encode_srgb, !color_passthrough && !pass->has_color_transform);
 
 	glUniform1f(shader->discard_transparent, fx_options->discard_transparent);
 
@@ -1305,7 +1355,8 @@ static const char *reset_status_str(GLenum status) {
 
 struct fx_gles_render_pass *fx_begin_buffer_pass(struct fx_framebuffer *buffer,
 		struct wlr_egl_context *prev_ctx, struct fx_render_timer *timer,
-		struct wlr_drm_syncobj_timeline *signal_timeline, uint64_t signal_point) {
+		struct wlr_drm_syncobj_timeline *signal_timeline, uint64_t signal_point,
+		bool has_color_transform) {
 	struct fx_renderer *renderer = buffer->renderer;
 	struct wlr_buffer *wlr_buffer = buffer->buffer;
 
@@ -1333,6 +1384,7 @@ struct fx_gles_render_pass *fx_begin_buffer_pass(struct fx_framebuffer *buffer,
 	pass->buffer = buffer;
 	pass->timer = timer;
 	pass->prev_ctx = *prev_ctx;
+	pass->has_color_transform = has_color_transform;
 	if (signal_timeline != NULL) {
 		pass->signal_timeline = wlr_drm_syncobj_timeline_ref(signal_timeline);
 		pass->signal_point = signal_point;

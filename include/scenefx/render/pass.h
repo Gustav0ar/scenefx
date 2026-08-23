@@ -17,6 +17,7 @@ struct fx_gles_render_pass {
 	struct fx_render_timer *timer;
 	struct wlr_drm_syncobj_timeline *signal_timeline;
 	uint64_t signal_point;
+	bool has_color_transform;
 
 	// The region where there's blur
 	pixman_region32_t blur_padding_region;

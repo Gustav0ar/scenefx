@@ -166,7 +166,8 @@ static struct wlr_render_pass *begin_buffer_pass(struct wlr_renderer *wlr_render
 	}
 
 	struct fx_gles_render_pass *pass = fx_begin_buffer_pass(buffer,
-			&prev_ctx, timer, options->signal_timeline, options->signal_point);
+			&prev_ctx, timer, options->signal_timeline, options->signal_point,
+			options->color_transform != NULL);
 	if (!pass) {
 		TRACY_BOTH_ZONES_END_FAIL;
 		return NULL;
@@ -460,6 +461,8 @@ struct wlr_renderer *fx_renderer_create_egl(struct wlr_egl *egl) {
 		return NULL;
 	}
 	wlr_renderer_init(&renderer->wlr_renderer, &renderer_impl, WLR_BUFFER_CAP_DMABUF);
+	renderer->wlr_renderer.color_encodings = 0;
+	renderer->wlr_renderer.features.input_color_transform = true;
 	renderer->wlr_renderer.features.output_color_transform = false;
 
 	wl_list_init(&renderer->buffers);
