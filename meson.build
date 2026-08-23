@@ -195,6 +195,10 @@ scenefx = declare_dependency(
 
 meson.override_dependency(versioned_name, scenefx)
 
+if get_option('tests').enabled()
+	subdir('tests')
+endif
+
 summary(features + internal_features, bool_yn: true)
 
 if get_option('examples')

@@ -1464,6 +1464,10 @@ void fx_render_pass_add_blur(struct fx_gles_render_pass *pass,
 		.height = buffer->buffer->height,
 	};
 	tex_options->base.texture = &blur_texture->wlr_texture;
+	if (pass->has_color_transform) {
+		tex_options->base.transfer_function =
+			WLR_COLOR_TRANSFER_FUNCTION_EXT_LINEAR;
+	}
 	// since we're capturing from the fbo, transform will always be normal
 	tex_options->base.transform = WL_OUTPUT_TRANSFORM_NORMAL;
 	tex_options->clipped_region = fx_options->clipped_region;
