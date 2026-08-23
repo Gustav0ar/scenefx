@@ -18,6 +18,7 @@
 #include <wlr/util/transform.h>
 
 #include "render/color.h"
+#include "render/fx_renderer/fx_renderer.h"
 #include "render/tracy.h"
 #include "scenefx/render/fx_renderer/fx_offscreen_buffers.h"
 #include "scenefx/render/pass.h"
@@ -3451,6 +3452,9 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
 	}
 
 	assert(buffer->width == resolution_width && buffer->height == resolution_height);
+	if (wlr_renderer_is_fx(output->renderer)) {
+		fx_renderer_set_allocator(output->renderer, output->allocator);
+	}
 
 	if (timer) {
 		timer->render_timer = wlr_render_timer_create(output->renderer);

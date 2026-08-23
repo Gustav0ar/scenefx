@@ -42,6 +42,12 @@ struct fx_renderer *fx_get_renderer(
 	return renderer;
 }
 
+void fx_renderer_set_allocator(struct wlr_renderer *wlr_renderer,
+		struct wlr_allocator *allocator) {
+	struct fx_renderer *renderer = fx_get_renderer(wlr_renderer);
+	renderer->allocator = allocator;
+}
+
 bool wlr_render_timer_is_fx(struct wlr_render_timer *timer) {
 	return timer->impl == &render_timer_impl;
 }
@@ -94,6 +100,7 @@ static inline void free_shaders(struct fx_renderer *renderer) {
 	glDeleteProgram(renderer->shaders.tex_effects_rgba.program);
 	glDeleteProgram(renderer->shaders.tex_effects_rgbx.program);
 	glDeleteProgram(renderer->shaders.tex_effects_ext.program);
+	glDeleteProgram(renderer->shaders.output.program);
 	glDeleteProgram(renderer->shaders.box_shadow.program);
 	glDeleteProgram(renderer->shaders.blur1.program);
 	glDeleteProgram(renderer->shaders.blur2.program);
@@ -118,9 +125,14 @@ static void fx_renderer_destroy(struct wlr_renderer *wlr_renderer) {
 		fx_offscreen_buffers_destroy(fbos);
 	}
 
-	struct fx_framebuffer *buffer, *buffer_tmp;
-	wl_list_for_each_safe(buffer, buffer_tmp, &renderer->buffers, link) {
-		fx_framebuffer_destroy(buffer);
+	while (!wl_list_empty(&renderer->buffers)) {
+		struct fx_framebuffer *buffer = wl_container_of(
+			renderer->buffers.next, buffer, link);
+		if (buffer->owned) {
+			wlr_buffer_drop(buffer->buffer);
+		} else {
+			fx_framebuffer_destroy(buffer);
+		}
 	}
 
 	free_shaders(renderer);
@@ -167,8 +179,9 @@ static struct wlr_render_pass *begin_buffer_pass(struct wlr_renderer *wlr_render
 
 	struct fx_gles_render_pass *pass = fx_begin_buffer_pass(buffer,
 			&prev_ctx, timer, options->signal_timeline, options->signal_point,
-			options->color_transform != NULL);
+			options->color_transform);
 	if (!pass) {
+		wlr_egl_restore_context(&prev_ctx);
 		TRACY_BOTH_ZONES_END_FAIL;
 		return NULL;
 	}
@@ -417,6 +430,10 @@ static bool link_shaders(struct fx_renderer *renderer) {
 		wlr_log(WLR_ERROR, "Could not link tex_effects_EXTERNAL shader");
 		goto error;
 	}
+	if (!link_output_program(&renderer->shaders.output)) {
+		wlr_log(WLR_ERROR, "Could not link output shader");
+		goto error;
+	}
 
 	// box shadow shader
 	if (!link_box_shadow_program(&renderer->shaders.box_shadow)) {
@@ -590,6 +607,11 @@ struct wlr_renderer *fx_renderer_create_egl(struct wlr_egl *egl) {
 	wlr_egl_unset_current(renderer->egl);
 
 	get_fx_shm_formats(renderer, &renderer->shm_texture_formats);
+	const struct wlr_drm_format_set *render_formats =
+		wlr_egl_get_dmabuf_render_formats(renderer->egl);
+	renderer->wlr_renderer.features.output_color_transform =
+		wlr_drm_format_set_get(render_formats,
+			DRM_FORMAT_ABGR16161616F) != NULL;
 
 	int drm_fd = wlr_renderer_get_drm_fd(&renderer->wlr_renderer);
 	uint64_t cap_syncobj_timeline;

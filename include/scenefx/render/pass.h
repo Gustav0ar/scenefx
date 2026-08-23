@@ -2,6 +2,8 @@
 #define SCENE_FX_RENDER_PASS_H
 
 #include <stdbool.h>
+#include <GLES2/gl2.h>
+#include <wlr/render/color.h>
 #include <wlr/render/pass.h>
 #include <wlr/render/interface.h>
 #include <wlr/render/swapchain.h>
@@ -12,12 +14,18 @@
 struct fx_gles_render_pass {
 	struct wlr_render_pass base;
 	struct fx_framebuffer *buffer;
+	struct fx_framebuffer *output_buffer;
 	float projection_matrix[9];
 	struct wlr_egl_context prev_ctx;
 	struct fx_render_timer *timer;
 	struct wlr_drm_syncobj_timeline *signal_timeline;
 	uint64_t signal_point;
 	bool has_color_transform;
+	float output_matrix[9];
+	enum wlr_color_transfer_function output_tf;
+	GLuint output_lut;
+	float output_lut_dim;
+	pixman_region32_t updated_region;
 
 	// The region where there's blur
 	pixman_region32_t blur_padding_region;

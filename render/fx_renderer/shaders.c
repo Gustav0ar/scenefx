@@ -16,6 +16,7 @@
 #include "quad_round_frag_src.h"
 #include "quad_grad_round_frag_src.h"
 #include "tex_frag_src.h"
+#include "output_frag_src.h"
 #include "box_shadow_frag_src.h"
 #include "blur1_frag_src.h"
 #include "blur2_frag_src.h"
@@ -284,6 +285,25 @@ bool link_tex_program(struct tex_shader *shader, enum fx_tex_shader_source sourc
 	shader->effects.clip_radius.bottom_left = glGetUniformLocation(prog, "clip_radius_bottom_left");
 	shader->effects.clip_radius.bottom_right = glGetUniformLocation(prog, "clip_radius_bottom_right");
 
+	return true;
+}
+
+bool link_output_program(struct output_shader *shader) {
+	GLuint prog;
+	shader->program = prog = link_program(output_frag_src);
+	if (!shader->program) {
+		return false;
+	}
+
+	shader->proj = glGetUniformLocation(prog, "proj");
+	shader->tex_proj = glGetUniformLocation(prog, "tex_proj");
+	shader->tex = glGetUniformLocation(prog, "tex");
+	shader->matrix = glGetUniformLocation(prog, "color_matrix");
+	shader->inverse_eotf = glGetUniformLocation(prog, "inverse_eotf");
+	shader->lut = glGetUniformLocation(prog, "lut");
+	shader->lut_dim = glGetUniformLocation(prog, "lut_dim");
+	shader->has_lut = glGetUniformLocation(prog, "has_lut");
+	shader->pos_attrib = glGetAttribLocation(prog, "pos");
 	return true;
 }
 

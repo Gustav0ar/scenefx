@@ -10,6 +10,7 @@ shaders = [
 	'quad_round.frag',
 	'quad_grad_round.frag',
 	'tex.frag',
+	'output.frag',
 	'box_shadow.frag',
 	'blur1.frag',
 	'blur2.frag',
@@ -28,4 +29,3 @@ foreach name : shaders
 		capture: true,
 	)
 endforeach
-

@@ -16,6 +16,10 @@
 #include "render/tracy.h"
 
 struct fx_framebuffer;
+struct wlr_allocator;
+
+void fx_renderer_set_allocator(struct wlr_renderer *renderer,
+	struct wlr_allocator *allocator);
 
 struct fx_pixel_format {
 	uint32_t drm_format;
@@ -40,6 +44,10 @@ struct fx_framebuffer {
 	struct fx_renderer *renderer;
 	struct wl_list link; // fx_renderer.buffers
 	bool external_only;
+	bool owned;
+	uint32_t drm_format;
+	struct fx_framebuffer *blend_buffer;
+	struct fx_framebuffer *blend_parent;
 
 	EGLImageKHR image;
 	GLuint rbo;
@@ -55,7 +63,7 @@ struct fx_framebuffer {
  * Note: Does not bind back to the default Framebuffer!
  */
 void fx_framebuffer_get_or_create_custom(struct fx_renderer *fx_renderer,
-		struct wlr_allocator *allocator, int width, int height, bool has_alpha,
+		struct wlr_allocator *allocator, int width, int height, uint32_t format,
 		struct fx_framebuffer **fx_buffer, bool *failed);
 
 struct fx_framebuffer *fx_framebuffer_get_or_create(struct fx_renderer *renderer,
@@ -151,6 +159,7 @@ struct fx_renderer {
 
 	struct wlr_egl *egl;
 	int drm_fd;
+	struct wlr_allocator *allocator;
 
 	struct wlr_drm_format_set shm_texture_formats;
 
@@ -198,6 +207,7 @@ struct fx_renderer {
 		struct tex_shader tex_effects_rgba;
 		struct tex_shader tex_effects_rgbx;
 		struct tex_shader tex_effects_ext;
+		struct output_shader output;
 
 		struct box_shadow_shader box_shadow;
 		struct blur_shader blur1;

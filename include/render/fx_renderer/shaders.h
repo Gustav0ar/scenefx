@@ -136,6 +136,21 @@ struct tex_shader {
 bool link_tex_program(struct tex_shader *shader, enum fx_tex_shader_source source,
 		bool effects);
 
+struct output_shader {
+	GLuint program;
+	GLint proj;
+	GLint tex_proj;
+	GLint tex;
+	GLint matrix;
+	GLint inverse_eotf;
+	GLint lut;
+	GLint lut_dim;
+	GLint has_lut;
+	GLint pos_attrib;
+};
+
+bool link_output_program(struct output_shader *shader);
+
 struct box_shadow_shader {
 	GLuint program;
 	GLint proj;

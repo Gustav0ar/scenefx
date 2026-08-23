@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <drm_fourcc.h>
 #include <wlr/interfaces/wlr_buffer.h>
 #include <wlr/render/allocator.h>
 #include <wlr/render/interface.h>
@@ -67,7 +68,7 @@ GLuint fx_framebuffer_get_fbo(struct fx_framebuffer *buffer) {
 }
 
 void fx_framebuffer_get_or_create_custom(struct fx_renderer *renderer,
-		struct wlr_allocator *allocator, int width, int height, bool has_alpha,
+		struct wlr_allocator *allocator, int width, int height, uint32_t format,
 		struct fx_framebuffer **fx_framebuffer, bool *failed) {
 	if (*failed) {
 		return;
@@ -76,7 +77,8 @@ void fx_framebuffer_get_or_create_custom(struct fx_renderer *renderer,
 	if (*fx_framebuffer != NULL) {
 		struct wlr_buffer *wlr_buffer = (*fx_framebuffer)->buffer;
 		if (wlr_buffer != NULL) {
-			if (wlr_buffer->width == width && wlr_buffer->height == height) {
+			if (wlr_buffer->width == width && wlr_buffer->height == height &&
+					(*fx_framebuffer)->drm_format == format) {
 				return;
 			}
 			// Create a new wlr_buffer if it's null or if the output size has
@@ -89,18 +91,22 @@ void fx_framebuffer_get_or_create_custom(struct fx_renderer *renderer,
 	}
 
 	// Get the best supported DRM format (DMABUF if supported)
-	const struct wlr_drm_format_set *texture_formats = wlr_renderer_get_texture_formats(
-			&renderer->wlr_renderer, renderer->wlr_renderer.render_buffer_caps);
-	const struct fx_pixel_format *pix_format =
-		get_fx_format_from_gl(GL_RGBA, GL_UNSIGNED_BYTE, has_alpha);
-	const struct wlr_drm_format *format = wlr_drm_format_set_get(texture_formats, pix_format->drm_format);
-	if (format == NULL) {
-		wlr_log(WLR_ERROR, "Failed to get a supported texture format while allocating buffer");
+	const struct wlr_drm_format_set *texture_formats =
+		wlr_renderer_get_texture_formats(&renderer->wlr_renderer,
+			renderer->wlr_renderer.render_buffer_caps);
+	const struct wlr_drm_format_set *formats = format == DRM_FORMAT_ABGR16161616F
+		? wlr_egl_get_dmabuf_render_formats(renderer->egl)
+		: texture_formats;
+	const struct wlr_drm_format *drm_format =
+		wlr_drm_format_set_get(formats, format);
+	if (drm_format == NULL) {
+		wlr_log(WLR_ERROR, "Failed to get a supported format while allocating buffer");
 		*failed = true;
 		return;
 	}
 
-	struct wlr_buffer *wlr_buffer = wlr_allocator_create_buffer(allocator, width, height, format);
+	struct wlr_buffer *wlr_buffer =
+		wlr_allocator_create_buffer(allocator, width, height, drm_format);
 	if (wlr_buffer == NULL) {
 		wlr_log(WLR_ERROR, "Failed to allocate wlr_buffer");
 		*failed = true;
@@ -114,7 +120,12 @@ void fx_framebuffer_get_or_create_custom(struct fx_renderer *renderer,
 		*failed = true;
 		return;
 	}
-	fx_framebuffer_get_fbo(*fx_framebuffer);
+	(*fx_framebuffer)->owned = true;
+	if (fx_framebuffer_get_fbo(*fx_framebuffer) == 0) {
+		wlr_buffer_drop(wlr_buffer);
+		*fx_framebuffer = NULL;
+		*failed = true;
+	}
 }
 
 struct fx_framebuffer *fx_framebuffer_get_or_create(struct fx_renderer *renderer,
@@ -138,6 +149,7 @@ struct fx_framebuffer *fx_framebuffer_get_or_create(struct fx_renderer *renderer
 	if (!wlr_buffer_get_dmabuf(wlr_buffer, &dmabuf)) {
 		goto error_buffer;
 	}
+	buffer->drm_format = dmabuf.format;
 
 	buffer->image = wlr_egl_create_image_from_dmabuf(renderer->egl,
 		&dmabuf, &buffer->external_only);
@@ -170,6 +182,16 @@ void fx_framebuffer_destroy(struct fx_framebuffer *fx_buffer) {
 		return;
 	}
 
+	if (fx_buffer->blend_buffer != NULL) {
+		struct wlr_buffer *blend_buffer = fx_buffer->blend_buffer->buffer;
+		fx_buffer->blend_buffer = NULL;
+		wlr_buffer_drop(blend_buffer);
+	}
+	if (fx_buffer->blend_parent != NULL) {
+		fx_buffer->blend_parent->blend_buffer = NULL;
+		fx_buffer->blend_parent = NULL;
+	}
+
 	// Release the framebuffer
 	wl_list_remove(&fx_buffer->link);
 	wlr_addon_finish(&fx_buffer->addon);
@@ -192,4 +214,3 @@ void fx_framebuffer_destroy(struct fx_framebuffer *fx_buffer) {
 
 	free(fx_buffer);
 }
-

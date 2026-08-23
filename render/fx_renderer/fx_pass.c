@@ -2,7 +2,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
+#include <drm_fourcc.h>
 #include <pixman.h>
+#include <string.h>
 #include <time.h>
 #include <unistd.h>
 #include <wlr/render/allocator.h>
@@ -73,15 +75,19 @@ bool fx_render_pass_init_offscreen_buffers(struct wlr_render_pass *render_pass,
 	const int width = pass->buffer->buffer->width;
 	const int height = pass->buffer->buffer->height;
 	bool failed = false;
-	fx_framebuffer_get_or_create_custom(renderer, output->allocator, width, height, false,
+	const uint32_t opaque_format = pass->has_color_transform
+		? DRM_FORMAT_ABGR16161616F : DRM_FORMAT_XBGR8888;
+	const uint32_t alpha_format = pass->has_color_transform
+		? DRM_FORMAT_ABGR16161616F : DRM_FORMAT_ABGR8888;
+	fx_framebuffer_get_or_create_custom(renderer, output->allocator, width, height, opaque_format,
 			&pass->fx_offscreen_buffers->blur_saved_pixels_buffer, &failed);
-	fx_framebuffer_get_or_create_custom(renderer, output->allocator, width, height, true,
+	fx_framebuffer_get_or_create_custom(renderer, output->allocator, width, height, alpha_format,
 			&pass->fx_offscreen_buffers->effects_buffer, &failed);
-	fx_framebuffer_get_or_create_custom(renderer, output->allocator, width, height, true,
+	fx_framebuffer_get_or_create_custom(renderer, output->allocator, width, height, alpha_format,
 			&pass->fx_offscreen_buffers->effects_buffer_swapped, &failed);
-	fx_framebuffer_get_or_create_custom(renderer, output->allocator, width, height, false,
+	fx_framebuffer_get_or_create_custom(renderer, output->allocator, width, height, opaque_format,
 			&pass->fx_offscreen_buffers->optimized_blur_buffer, &failed);
-	fx_framebuffer_get_or_create_custom(renderer, output->allocator, width, height, false,
+	fx_framebuffer_get_or_create_custom(renderer, output->allocator, width, height, opaque_format,
 			&pass->fx_offscreen_buffers->optimized_no_blur_buffer, &failed);
 
 	// Bind back to the default buffer
@@ -102,10 +108,74 @@ bool fx_render_pass_init_offscreen_buffers(struct wlr_render_pass *render_pass,
 
 static const struct wlr_render_pass_impl render_pass_impl;
 
+static void render(const struct wlr_box *box, const pixman_region32_t *clip,
+	GLint attrib);
+static void set_proj_matrix(GLint loc, float proj[9],
+	const struct wlr_box *box);
+static void set_tex_matrix(GLint loc, enum wl_output_transform trans,
+	const struct wlr_fbox *box);
+
 struct fx_gles_render_pass *fx_get_render_pass(struct wlr_render_pass *render_pass) {
 	assert(render_pass->impl == &render_pass_impl);
 	struct fx_gles_render_pass *pass = wl_container_of(render_pass, pass, base);
 	return pass;
+}
+
+static bool render_pass_apply_output_transform(struct fx_gles_render_pass *pass) {
+	if (!pass->has_color_transform ||
+			!pixman_region32_not_empty(&pass->updated_region)) {
+		return true;
+	}
+
+	struct fx_renderer *renderer = pass->buffer->renderer;
+	struct wlr_texture *wlr_texture = fx_texture_from_buffer(
+		&renderer->wlr_renderer, pass->buffer->buffer);
+	if (wlr_texture == NULL) {
+		return false;
+	}
+	struct fx_texture *texture = fx_get_texture(wlr_texture);
+	struct output_shader *shader = &renderer->shaders.output;
+	struct wlr_box box = {
+		.width = pass->output_buffer->buffer->width,
+		.height = pass->output_buffer->buffer->height,
+	};
+	struct wlr_fbox src_box = {
+		.width = 1.0,
+		.height = 1.0,
+	};
+
+	fx_framebuffer_bind(pass->output_buffer);
+	glViewport(0, 0, box.width, box.height);
+	glDisable(GL_BLEND);
+	glDisable(GL_STENCIL_TEST);
+	glUseProgram(shader->program);
+
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(texture->target, texture->tex);
+	glTexParameteri(texture->target, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(texture->target, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glUniform1i(shader->tex, 0);
+
+	glUniformMatrix3fv(shader->matrix, 1, GL_FALSE, pass->output_matrix);
+	glUniform1i(shader->inverse_eotf, pass->output_tf);
+	glUniform1i(shader->has_lut, pass->output_lut != 0);
+	glUniform1f(shader->lut_dim, pass->output_lut_dim);
+	if (pass->output_lut != 0) {
+		glActiveTexture(GL_TEXTURE1);
+		glBindTexture(GL_TEXTURE_2D, pass->output_lut);
+		glUniform1i(shader->lut, 1);
+	}
+
+	set_proj_matrix(shader->proj, pass->projection_matrix, &box);
+	set_tex_matrix(shader->tex_proj, WL_OUTPUT_TRANSFORM_NORMAL, &src_box);
+	render(&box, &pass->updated_region, shader->pos_attrib);
+
+	glActiveTexture(GL_TEXTURE1);
+	glBindTexture(GL_TEXTURE_2D, 0);
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(texture->target, 0);
+	wlr_texture_destroy(wlr_texture);
+	return true;
 }
 
 static bool render_pass_submit(struct wlr_render_pass *wlr_pass) {
@@ -116,6 +186,9 @@ static bool render_pass_submit(struct wlr_render_pass *wlr_pass) {
 
 	TRACY_BOTH_ZONES_START(pass->buffer->renderer);
 	push_fx_debug(renderer);
+	if (!render_pass_apply_output_transform(pass)) {
+		goto out;
+	}
 
 	if (timer) {
 		// clear disjoint flag
@@ -153,6 +226,9 @@ static bool render_pass_submit(struct wlr_render_pass *wlr_pass) {
 	ok = true;
 
 out:
+	if (pass->output_lut != 0) {
+		glDeleteTextures(1, &pass->output_lut);
+	}
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
 	pop_fx_debug(renderer);
@@ -162,10 +238,11 @@ out:
 	wlr_egl_restore_context(&pass->prev_ctx);
 
 	wlr_drm_syncobj_timeline_unref(pass->signal_timeline);
-	wlr_buffer_unlock(pass->buffer->buffer);
+	wlr_buffer_unlock(pass->output_buffer->buffer);
 
 	pass->fx_offscreen_buffers = NULL;
 	pixman_region32_fini(&pass->blur_padding_region);
+	pixman_region32_fini(&pass->updated_region);
 
 	free(pass);
 
@@ -325,6 +402,57 @@ static void setup_blending(enum wlr_render_blend_mode mode) {
 	}
 }
 
+static void render_pass_mark_updated(struct fx_gles_render_pass *pass,
+		const struct wlr_box *box, const pixman_region32_t *clip) {
+	if (!pass->has_color_transform) {
+		return;
+	}
+	pixman_region32_t region;
+	pixman_region32_init_rect(&region, box->x, box->y, box->width, box->height);
+	if (clip != NULL) {
+		pixman_region32_intersect(&region, &region, clip);
+	}
+	pixman_region32_union(&pass->updated_region, &pass->updated_region, &region);
+	pixman_region32_fini(&region);
+}
+
+static float color_to_linear_premult(float electrical, float alpha) {
+	return alpha == 0.0f ? 0.0f : powf(electrical / alpha, 2.2f) * alpha;
+}
+
+static struct wlr_render_color pass_color(struct fx_gles_render_pass *pass,
+		const struct wlr_render_color *color) {
+	if (!pass->has_color_transform) {
+		return *color;
+	}
+	return (struct wlr_render_color) {
+		.r = color_to_linear_premult(color->r, color->a),
+		.g = color_to_linear_premult(color->g, color->a),
+		.b = color_to_linear_premult(color->b, color->a),
+		.a = color->a,
+	};
+}
+
+static float *pass_gradient_colors(struct fx_gles_render_pass *pass,
+		const struct fx_gradient *gradient) {
+	if (!pass->has_color_transform) {
+		return gradient->colors;
+	}
+	float *colors = calloc(gradient->count * 4, sizeof(float));
+	if (colors == NULL) {
+		return NULL;
+	}
+	for (int i = 0; i < gradient->count; i++) {
+		const float *input = &gradient->colors[i * 4];
+		float *output = &colors[i * 4];
+		output[0] = color_to_linear_premult(input[0], input[3]);
+		output[1] = color_to_linear_premult(input[1], input[3]);
+		output[2] = color_to_linear_premult(input[2], input[3]);
+		output[3] = input[3];
+	}
+	return colors;
+}
+
 static bool apply_clip_region(pixman_region32_t *clip_region,
 		const struct wlr_box *clipped_region_box, const struct fx_corner_fradii *corners) {
 	if (!wlr_box_empty(clipped_region_box)) {
@@ -367,6 +495,107 @@ static void transpose_color_matrix(float out[static 9], const float matrix[stati
 	out[6] = matrix[2];
 	out[7] = matrix[5];
 	out[8] = matrix[8];
+}
+
+struct output_transform_state {
+	float matrix[9];
+	enum wlr_color_transfer_function tf;
+	const struct wlr_color_transform_lut_3x1d *lut;
+	bool has_matrix;
+	bool has_eotf;
+};
+
+static bool output_transform_collect(struct output_transform_state *state,
+		struct wlr_color_transform *transform) {
+	switch (transform->type) {
+	case COLOR_TRANSFORM_MATRIX: {
+		if (state->has_matrix || state->has_eotf || state->lut != NULL) {
+			return false;
+		}
+		struct wlr_color_transform_matrix *matrix =
+			wl_container_of(transform, matrix, base);
+		transpose_color_matrix(state->matrix, matrix->matrix);
+		state->has_matrix = true;
+		return true;
+	}
+	case COLOR_TRANSFORM_INVERSE_EOTF: {
+		if (state->has_eotf || state->lut != NULL) {
+			return false;
+		}
+		struct wlr_color_transform_inverse_eotf *eotf =
+			wlr_color_transform_inverse_eotf_from_base(transform);
+		state->tf = eotf->tf;
+		state->has_eotf = true;
+		return true;
+	}
+	case COLOR_TRANSFORM_LUT_3X1D:
+		if (state->lut != NULL) {
+			return false;
+		}
+		state->lut = color_transform_lut_3x1d_from_base(transform);
+		return state->lut->dim > 0;
+	case COLOR_TRANSFORM_PIPELINE: {
+		struct wlr_color_transform_pipeline *pipeline =
+			wl_container_of(transform, pipeline, base);
+		for (size_t i = 0; i < pipeline->len; i++) {
+			if (!output_transform_collect(state, pipeline->transforms[i])) {
+				return false;
+			}
+		}
+		return true;
+	}
+	case COLOR_TRANSFORM_LCMS2:
+		return false;
+	}
+	return false;
+}
+
+static void log_unsupported_output_transform(void) {
+	static struct timespec last_log;
+	struct timespec now;
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	if (last_log.tv_sec != 0 && now.tv_sec - last_log.tv_sec < 5) {
+		return;
+	}
+	last_log = now;
+	wlr_log(WLR_ERROR, "Unsupported output color transform");
+}
+
+static bool upload_output_lut(struct fx_gles_render_pass *pass,
+		const struct wlr_color_transform_lut_3x1d *lut) {
+	if (lut == NULL) {
+		return true;
+	}
+
+	GLint max_size;
+	glGetIntegerv(GL_MAX_TEXTURE_SIZE, &max_size);
+	if (lut->dim > (size_t)max_size || lut->dim > INT32_MAX / 6) {
+		return false;
+	}
+
+	uint8_t *data = malloc(lut->dim * 3 * 2);
+	if (data == NULL) {
+		return false;
+	}
+	for (size_t i = 0; i < lut->dim * 3; i++) {
+		data[i * 2] = lut->lut_3x1d[i] >> 8;
+		data[i * 2 + 1] = lut->lut_3x1d[i] & 0xFF;
+	}
+
+	while (glGetError() != GL_NO_ERROR) {
+	}
+	glGenTextures(1, &pass->output_lut);
+	glBindTexture(GL_TEXTURE_2D, pass->output_lut);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE_ALPHA, lut->dim, 3, 0,
+		GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE, data);
+	glBindTexture(GL_TEXTURE_2D, 0);
+	free(data);
+	pass->output_lut_dim = lut->dim;
+	return glGetError() == GL_NO_ERROR;
 }
 
 void fx_render_pass_add_texture(struct fx_gles_render_pass *pass,
@@ -476,6 +705,7 @@ void fx_render_pass_add_texture(struct fx_gles_render_pass *pass,
 	const struct wlr_box clipped_region_box = fx_options->clipped_region.area;
 	struct fx_corner_fradii clipped_region_corners = fx_options->clipped_region.corners;
 	apply_clip_region(&clip_region, &clipped_region_box, &clipped_region_corners);
+	render_pass_mark_updated(pass, &dst_box, &clip_region);
 
 	glUseProgram(shader->program);
 
@@ -557,7 +787,8 @@ void fx_render_pass_add_rect(struct fx_gles_render_pass *pass,
 
 	struct fx_renderer *renderer = pass->buffer->renderer;
 
-	const struct wlr_render_color *color = &options->color;
+	const struct wlr_render_color converted_color = pass_color(pass, &options->color);
+	const struct wlr_render_color *color = &converted_color;
 	struct wlr_box box;
 	struct wlr_buffer *wlr_buffer = pass->buffer->buffer;
 	wlr_render_rect_options_get_box(options, wlr_buffer, &box);
@@ -580,6 +811,7 @@ void fx_render_pass_add_rect(struct fx_gles_render_pass *pass,
 
 	push_fx_debug(renderer);
 	if (use_fast_clear) {
+		render_pass_mark_updated(pass, &box, NULL);
 		glClearColor(color->r, color->g, color->b, color->a);
 		glClear(GL_COLOR_BUFFER_BIT);
 	} else {
@@ -604,6 +836,7 @@ void fx_render_pass_add_rect(struct fx_gles_render_pass *pass,
 		}
 
 		apply_clip_region(&clip_region, clipped_region_box, clipped_region_corners);
+		render_pass_mark_updated(pass, &box, &clip_region);
 
 		setup_blending(blend_mode);
 		struct quad_shader *shader = should_clip
@@ -643,6 +876,11 @@ void fx_render_pass_add_rect_grad(struct fx_gles_render_pass *pass,
 	struct wlr_box box;
 	struct wlr_buffer *wlr_buffer = pass->buffer->buffer;
 	wlr_render_rect_options_get_box(options, wlr_buffer, &box);
+	float *gradient_colors = pass_gradient_colors(pass, &fx_options->gradient);
+	if (gradient_colors == NULL) {
+		return;
+	}
+	render_pass_mark_updated(pass, &box, options->clip);
 
 	TRACY_BOTH_ZONES_START(renderer);
 	TRACY_ZONE_TEXT_f("Box (WxH, X, Y): %dx%d, %d, %d", box.width, box.height, box.x, box.y);
@@ -668,7 +906,7 @@ void fx_render_pass_add_rect_grad(struct fx_gles_render_pass *pass,
 	glUseProgram(shader.program);
 
 	set_proj_matrix(shader.proj, pass->projection_matrix, &box);
-	glUniform4fv(shader.colors, fx_options->gradient.count, (GLfloat*)fx_options->gradient.colors);
+	glUniform4fv(shader.colors, fx_options->gradient.count, gradient_colors);
 	glUniform1i(shader.count, fx_options->gradient.count);
 	glUniform2f(shader.size, fx_options->gradient.range.width, fx_options->gradient.range.height);
 	glUniform1f(shader.degree, fx_options->gradient.degree);
@@ -678,6 +916,9 @@ void fx_render_pass_add_rect_grad(struct fx_gles_render_pass *pass,
 	glUniform2f(shader.origin, fx_options->gradient.origin[0], fx_options->gradient.origin[1]);
 
 	render(&box, options->clip, shader.pos_attrib);
+	if (gradient_colors != fx_options->gradient.colors) {
+		free(gradient_colors);
+	}
 
 	pop_fx_debug(renderer);
 	TRACY_BOTH_ZONES_END;
@@ -689,7 +930,8 @@ void fx_render_pass_add_rounded_rect(struct fx_gles_render_pass *pass,
 
 	struct fx_renderer *renderer = pass->buffer->renderer;
 
-	const struct wlr_render_color *color = &options->color;
+	const struct wlr_render_color converted_color = pass_color(pass, &options->color);
+	const struct wlr_render_color *color = &converted_color;
 	struct wlr_box box;
 	struct wlr_buffer *wlr_buffer = pass->buffer->buffer;
 	wlr_render_rect_options_get_box(options, wlr_buffer, &box);
@@ -704,6 +946,7 @@ void fx_render_pass_add_rounded_rect(struct fx_gles_render_pass *pass,
 	const struct wlr_box *clipped_region_box = &fx_options->clipped_region.area;
 	const struct fx_corner_fradii *clipped_region_corners = &fx_options->clipped_region.corners;
 	apply_clip_region(&clip_region, clipped_region_box, clipped_region_corners);
+	render_pass_mark_updated(pass, &box, &clip_region);
 
 	TRACY_BOTH_ZONES_START(renderer);
 	TRACY_ZONE_TEXT_f("Box (WxH, X, Y): %dx%d, %d, %d", box.width, box.height, box.x, box.y);
@@ -765,6 +1008,11 @@ void fx_render_pass_add_rounded_rect_grad(struct fx_gles_render_pass *pass,
 	struct wlr_box box;
 	struct wlr_buffer *wlr_buffer = pass->buffer->buffer;
 	wlr_render_rect_options_get_box(options, wlr_buffer, &box);
+	float *gradient_colors = pass_gradient_colors(pass, &fx_options->gradient);
+	if (gradient_colors == NULL) {
+		return;
+	}
+	render_pass_mark_updated(pass, &box, options->clip);
 
 	TRACY_BOTH_ZONES_START(renderer);
 	TRACY_ZONE_TEXT_f("Box (WxH, X, Y): %dx%d, %d, %d", box.width, box.height, box.x, box.y);
@@ -799,7 +1047,7 @@ void fx_render_pass_add_rounded_rect_grad(struct fx_gles_render_pass *pass,
 	glUniform2f(shader.size, box.width, box.height);
 	glUniform2f(shader.position, box.x, box.y);
 
-	glUniform4fv(shader.colors, fx_options->gradient.count, (GLfloat*)fx_options->gradient.colors);
+	glUniform4fv(shader.colors, fx_options->gradient.count, gradient_colors);
 	glUniform1i(shader.count, fx_options->gradient.count);
 	glUniform2f(shader.grad_size, fx_options->gradient.range.width, fx_options->gradient.range.height);
 	glUniform1f(shader.degree, fx_options->gradient.degree);
@@ -812,6 +1060,9 @@ void fx_render_pass_add_rounded_rect_grad(struct fx_gles_render_pass *pass,
 	uniform_corner_radii_set(&shader.radius, &corners);
 
 	render(&box, options->clip, shader.pos_attrib);
+	if (gradient_colors != fx_options->gradient.colors) {
+		free(gradient_colors);
+	}
 
 	pop_fx_debug(renderer);
 	TRACY_BOTH_ZONES_END;
@@ -834,6 +1085,7 @@ void fx_render_pass_add_box_shadow(struct fx_gles_render_pass *pass,
 	const struct wlr_box clipped_region_box = options->clipped_region.area;
 	struct fx_corner_fradii clipped_region_corners = options->clipped_region.corners;
 	apply_clip_region(&clip_region, &clipped_region_box, &clipped_region_corners);
+	render_pass_mark_updated(pass, &box, &clip_region);
 
 	TRACY_BOTH_ZONES_START(renderer);
 	TRACY_ZONE_TEXT_f("Box (WxH, X, Y): %dx%d, %d, %d", box.width, box.height, box.x, box.y);
@@ -858,7 +1110,8 @@ void fx_render_pass_add_box_shadow(struct fx_gles_render_pass *pass,
 
 	glUseProgram(renderer->shaders.box_shadow.program);
 
-	const struct wlr_render_color *color = &options->color;
+	const struct wlr_render_color converted_color = pass_color(pass, &options->color);
+	const struct wlr_render_color *color = &converted_color;
 	set_proj_matrix(renderer->shaders.box_shadow.proj, pass->projection_matrix, &box);
 	glUniform4f(renderer->shaders.box_shadow.color, color->r, color->g, color->b, color->a);
 	glUniform1f(renderer->shaders.box_shadow.blur_sigma, options->blur_sigma);
@@ -1356,9 +1609,10 @@ static const char *reset_status_str(GLenum status) {
 struct fx_gles_render_pass *fx_begin_buffer_pass(struct fx_framebuffer *buffer,
 		struct wlr_egl_context *prev_ctx, struct fx_render_timer *timer,
 		struct wlr_drm_syncobj_timeline *signal_timeline, uint64_t signal_point,
-		bool has_color_transform) {
+		struct wlr_color_transform *color_transform) {
 	struct fx_renderer *renderer = buffer->renderer;
 	struct wlr_buffer *wlr_buffer = buffer->buffer;
+	const bool has_color_transform = color_transform != NULL;
 
 	if (renderer->procs.glGetGraphicsResetStatusKHR) {
 		GLenum status = renderer->procs.glGetGraphicsResetStatusKHR();
@@ -1369,19 +1623,62 @@ struct fx_gles_render_pass *fx_begin_buffer_pass(struct fx_framebuffer *buffer,
 		}
 	}
 
-	GLint fbo = fx_framebuffer_get_fbo(buffer);
-	if (!fbo) {
-		return NULL;
-	}
-
 	struct fx_gles_render_pass *pass = calloc(1, sizeof(*pass));
 	if (pass == NULL) {
 		return NULL;
 	}
 
+	struct fx_framebuffer *target = buffer;
+	if (has_color_transform) {
+		struct output_transform_state state = {
+			.tf = WLR_COLOR_TRANSFER_FUNCTION_EXT_LINEAR,
+		};
+		wlr_matrix_identity(state.matrix);
+		if (!output_transform_collect(&state, color_transform)) {
+			log_unsupported_output_transform();
+			free(pass);
+			return NULL;
+		}
+		if (renderer->allocator == NULL) {
+			wlr_log(WLR_ERROR, "No allocator available for FP16 blend buffer");
+			free(pass);
+			return NULL;
+		}
+
+		bool failed = false;
+		fx_framebuffer_get_or_create_custom(renderer, renderer->allocator,
+			wlr_buffer->width, wlr_buffer->height,
+			DRM_FORMAT_ABGR16161616F, &buffer->blend_buffer, &failed);
+		if (failed || buffer->blend_buffer == NULL) {
+			free(pass);
+			return NULL;
+		}
+		buffer->blend_buffer->blend_parent = buffer;
+		target = buffer->blend_buffer;
+		memcpy(pass->output_matrix, state.matrix, sizeof(pass->output_matrix));
+		pass->output_tf = state.tf;
+		if (!upload_output_lut(pass, state.lut)) {
+			if (pass->output_lut != 0) {
+				glDeleteTextures(1, &pass->output_lut);
+			}
+			free(pass);
+			return NULL;
+		}
+	}
+
+	GLint fbo = fx_framebuffer_get_fbo(target);
+	if (!fbo) {
+		if (pass->output_lut != 0) {
+			glDeleteTextures(1, &pass->output_lut);
+		}
+		free(pass);
+		return NULL;
+	}
+
 	wlr_render_pass_init(&pass->base, &render_pass_impl);
 	wlr_buffer_lock(wlr_buffer);
-	pass->buffer = buffer;
+	pass->buffer = target;
+	pass->output_buffer = buffer;
 	pass->timer = timer;
 	pass->prev_ctx = *prev_ctx;
 	pass->has_color_transform = has_color_transform;
@@ -1392,6 +1689,7 @@ struct fx_gles_render_pass *fx_begin_buffer_pass(struct fx_framebuffer *buffer,
 
 	pass->fx_offscreen_buffers = NULL;
 	pixman_region32_init(&pass->blur_padding_region);
+	pixman_region32_init(&pass->updated_region);
 	pass->has_blur = false;
 
 	matrix_projection(pass->projection_matrix, wlr_buffer->width, wlr_buffer->height,
