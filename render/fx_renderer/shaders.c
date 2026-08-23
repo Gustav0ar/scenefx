@@ -376,6 +376,7 @@ bool link_blur_effects_program(struct blur_effects_shader *shader) {
 	shader->tex = glGetUniformLocation(prog, "tex");
 	shader->pos_attrib = glGetAttribLocation(prog, "pos");
 	shader->tex_proj = glGetUniformLocation(prog, "tex_proj");
+	shader->linear = glGetUniformLocation(prog, "linear");
 	shader->noise = glGetUniformLocation(prog, "noise");
 	shader->brightness = glGetUniformLocation(prog, "brightness");
 	shader->contrast = glGetUniformLocation(prog, "contrast");

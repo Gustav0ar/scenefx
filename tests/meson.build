@@ -12,6 +12,7 @@ foreach case_name : [
 	'bt2020-to-srgb',
 	'fp16-blending',
 	'fp16-blur',
+	'fp16-blur-effects',
 ]
 	test(
 		'color-' + case_name,

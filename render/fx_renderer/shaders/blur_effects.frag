@@ -11,6 +11,35 @@ uniform float brightness;
 uniform float contrast;
 uniform float saturation;
 uniform float noise;
+uniform int linear;
+
+float srgb_channel_to_linear(float x) {
+	return x > 0.04045
+		? pow((x + 0.055) / 1.055, 2.4)
+		: x / 12.92;
+}
+
+vec3 srgb_color_to_linear(vec3 color) {
+	return vec3(
+		srgb_channel_to_linear(color.r),
+		srgb_channel_to_linear(color.g),
+		srgb_channel_to_linear(color.b)
+	);
+}
+
+float linear_channel_to_srgb(float x) {
+	return x > 0.0031308
+		? 1.055 * pow(x, 1.0 / 2.4) - 0.055
+		: 12.92 * x;
+}
+
+vec3 linear_color_to_srgb(vec3 color) {
+	return vec3(
+		linear_channel_to_srgb(color.r),
+		linear_channel_to_srgb(color.g),
+		linear_channel_to_srgb(color.b)
+	);
+}
 
 mat4 brightnessMatrix() {
 	float b = brightness - 1.0;
@@ -51,8 +80,17 @@ float noiseAmount(vec2 p) {
 
 void main() {
 	vec4 color = texture2D(tex, v_texcoord);
+	float alpha = color.a;
+	// Blur controls are defined for gamma-encoded content. Convert FP16 linear
+	// work-buffer samples so HDR rendering preserves the SDR blur appearance.
+	if (linear != 0 && alpha != 0.0) {
+		color.rgb = linear_color_to_srgb(max(color.rgb / alpha, vec3(0.0))) * alpha;
+	}
 	// Do *not* transpose the combined matrix when multiplying
 	color = brightnessMatrix() * contrastMatrix() * saturationMatrix() * color;
 	color.xyz += noiseAmount(v_texcoord);
+	if (linear != 0 && alpha != 0.0) {
+		color.rgb = srgb_color_to_linear(color.rgb / alpha) * alpha;
+	}
 	gl_FragColor = color;
 }

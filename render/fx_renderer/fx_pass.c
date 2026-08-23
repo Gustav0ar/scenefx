@@ -1262,6 +1262,7 @@ static void render_blur_effects(struct fx_gles_render_pass *pass,
 	glUniform1f(shader.brightness, blur_data->brightness);
 	glUniform1f(shader.contrast, blur_data->contrast);
 	glUniform1f(shader.saturation, blur_data->saturation);
+	glUniform1i(shader.linear, pass->has_color_transform);
 
 	set_proj_matrix(shader.proj, pass->projection_matrix, &dst_box);
 	set_tex_matrix(shader.tex_proj, options->transform, &src_fbox);

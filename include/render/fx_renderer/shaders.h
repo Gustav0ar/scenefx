@@ -187,6 +187,7 @@ struct blur_effects_shader {
 	GLint tex_proj;
 	GLint tex;
 	GLint pos_attrib;
+	GLint linear;
 	GLfloat noise;
 	GLfloat brightness;
 	GLfloat contrast;

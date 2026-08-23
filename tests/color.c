@@ -176,7 +176,8 @@ static bool render_texture(struct fixture *fixture, int width, int height,
 		const void *input_data, enum wlr_color_transfer_function input_tf,
 		const struct wlr_color_primaries *input_primaries,
 		const float *luminance_multiplier,
-		struct wlr_color_transform *output_transform, bool blur,
+		struct wlr_color_transform *output_transform,
+		struct blur_data *blur_data,
 		uint32_t read_format, uint32_t read_stride, void *read_data) {
 	struct wlr_texture *texture = wlr_texture_from_pixels(fixture->renderer,
 		input_format, input_stride, 1, 1, input_data);
@@ -221,18 +222,11 @@ static bool render_texture(struct fixture *fixture, int width, int height,
 	});
 
 	bool ok = true;
-	if (blur) {
+	if (blur_data != NULL) {
 		ok = check(fx_render_pass_init_offscreen_buffers(
 			pass, fixture->output), "initialize FP16 effect buffers");
 		if (ok) {
 			const float opacity = 1.0f;
-			struct blur_data blur_data = {
-				.num_passes = 1,
-				.radius = 1.0f,
-				.brightness = 1.0f,
-				.contrast = 1.0f,
-				.saturation = 1.0f,
-			};
 			struct fx_render_blur_pass_options blur_options = {
 				.tex_options = {
 					.base = {
@@ -245,7 +239,7 @@ static bool render_texture(struct fixture *fixture, int width, int height,
 					},
 					.clip_box = &box,
 				},
-				.blur_data = &blur_data,
+				.blur_data = blur_data,
 				.blur_strength = 1.0f,
 			};
 			fx_render_pass_add_blur(fx_get_render_pass(pass), &blur_options);
@@ -352,7 +346,7 @@ static bool test_null_transform(struct fixture *fixture) {
 	uint8_t output[4] = {0};
 	return render_texture(fixture, 1, 1, DRM_FORMAT_ABGR8888,
 		DRM_FORMAT_ABGR8888, 4, input, WLR_COLOR_TRANSFER_FUNCTION_SRGB,
-		NULL, NULL, NULL, false, DRM_FORMAT_ABGR8888, 4, output) &&
+		NULL, NULL, NULL, NULL, DRM_FORMAT_ABGR8888, 4, output) &&
 		codes_close(output, input, 0);
 }
 
@@ -370,7 +364,7 @@ static bool test_pq_roundtrip(struct fixture *fixture) {
 		render_texture(fixture, 1, 1, DRM_FORMAT_ABGR8888,
 			DRM_FORMAT_ABGR8888, 4, input,
 			WLR_COLOR_TRANSFER_FUNCTION_ST2084_PQ, &bt2020,
-			&input_luminance, transform, false,
+			&input_luminance, transform, NULL,
 			DRM_FORMAT_ABGR8888, 4, output) &&
 		codes_close(output, input, 1);
 	wlr_color_transform_unref(transform);
@@ -408,7 +402,7 @@ static bool test_bt2020_to_srgb(struct fixture *fixture) {
 		render_texture(fixture, 1, 1, DRM_FORMAT_ABGR8888,
 			DRM_FORMAT_ABGR8888, 4, input,
 			WLR_COLOR_TRANSFER_FUNCTION_SRGB, &bt2020, NULL,
-			transform, false, DRM_FORMAT_ABGR8888, 4, output) &&
+			transform, NULL, DRM_FORMAT_ABGR8888, 4, output) &&
 		codes_close(output, expected, 1);
 	wlr_color_transform_unref(transform);
 	return ok;
@@ -439,11 +433,19 @@ static bool test_fp16(struct fixture *fixture, bool blur) {
 	struct wlr_color_transform *transform = create_output_transform(
 		WLR_COLOR_NAMED_PRIMARIES_SRGB,
 		WLR_COLOR_TRANSFER_FUNCTION_ST2084_PQ, 203.0f / 10000.0f);
+	struct blur_data blur_options = {
+		.num_passes = 1,
+		.radius = 1.0f,
+		.brightness = 1.0f,
+		.contrast = 1.0f,
+		.saturation = 1.0f,
+	};
 	bool ok = check(transform != NULL, "create FP16 output transform") &&
 		render_texture(fixture, TEST_WIDTH, TEST_HEIGHT, format,
 			DRM_FORMAT_ABGR16161616F, sizeof(input), input,
 			WLR_COLOR_TRANSFER_FUNCTION_EXT_LINEAR, NULL, NULL,
-			transform, blur, format, TEST_WIDTH * sizeof(uint32_t), output);
+			transform, blur ? &blur_options : NULL, format,
+			TEST_WIDTH * sizeof(uint32_t), output);
 	wlr_color_transform_unref(transform);
 	if (!ok) {
 		return false;
@@ -457,6 +459,51 @@ static bool test_fp16(struct fixture *fixture, bool blur) {
 	return check(abs(actual - expected) <= tolerance,
 		blur ? "blur preserves FP16 luminance" : "FP16 blend preserves luminance") &&
 		check(actual > sdr_white + 2, "value remains above SDR white");
+}
+
+static bool test_fp16_blur_effects(struct fixture *fixture) {
+	uint32_t format = select_10bit_format(fixture);
+	if (!check(format != DRM_FORMAT_INVALID, "find 10-bit output format")) {
+		return false;
+	}
+	const float input_linear = 0.05f;
+	const uint16_t input[4] = {
+		float_to_half(input_linear),
+		float_to_half(input_linear),
+		float_to_half(input_linear),
+		float_to_half(1.0f),
+	};
+	uint32_t output[TEST_WIDTH * TEST_HEIGHT] = {0};
+	struct wlr_color_transform *transform = create_output_transform(
+		WLR_COLOR_NAMED_PRIMARIES_SRGB,
+		WLR_COLOR_TRANSFER_FUNCTION_ST2084_PQ, 203.0f / 10000.0f);
+	struct blur_data blur_options = {
+		.num_passes = 1,
+		.radius = 1.0f,
+		.brightness = 0.9f,
+		.contrast = 0.9f,
+		.saturation = 1.1f,
+	};
+	bool ok = check(transform != NULL, "create FP16 blur-effects output transform") &&
+		render_texture(fixture, TEST_WIDTH, TEST_HEIGHT, format,
+			DRM_FORMAT_ABGR16161616F, sizeof(input), input,
+			WLR_COLOR_TRANSFER_FUNCTION_EXT_LINEAR, NULL, NULL,
+			transform, &blur_options, format,
+			TEST_WIDTH * sizeof(uint32_t), output);
+	wlr_color_transform_unref(transform);
+	if (!ok) {
+		return false;
+	}
+
+	float encoded = linear_to_srgb(input_linear);
+	encoded = (encoded * 0.9f + 0.05f) - 0.1f;
+	float expected_linear = srgb_to_linear(encoded);
+	int expected = lroundf(linear_to_pq(
+		expected_linear * 203.0f / 10000.0f) * 1023.0f);
+	uint32_t pixel = output[(TEST_HEIGHT / 2) * TEST_WIDTH + TEST_WIDTH / 2];
+	int actual = pixel & 0x3FF;
+	return check(abs(actual - expected) <= 6,
+		"FP16 blur effects preserve gamma-space brightness");
 }
 
 int main(int argc, char *argv[]) {
@@ -483,6 +530,8 @@ int main(int argc, char *argv[]) {
 		ok = test_fp16(&fixture, false);
 	} else if (strcmp(argv[1], "fp16-blur") == 0) {
 		ok = test_fp16(&fixture, true);
+	} else if (strcmp(argv[1], "fp16-blur-effects") == 0) {
+		ok = test_fp16_blur_effects(&fixture);
 	} else {
 		fprintf(stderr, "unknown case: %s\n", argv[1]);
 		ok = false;
