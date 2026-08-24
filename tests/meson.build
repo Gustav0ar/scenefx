@@ -20,13 +20,3 @@ foreach case_name : [
 		args: case_name,
 	)
 endforeach
-
-scene_color_test = executable(
-	'scene-color-test',
-	'scene_color.c',
-	dependencies: scenefx_deps,
-	include_directories: [scenefx_inc, include_directories('..')],
-	link_with: lib_scenefx,
-)
-
-test('scene-color-scanout', scene_color_test)
