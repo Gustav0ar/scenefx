@@ -26,6 +26,9 @@ struct fx_gles_render_pass {
 	GLuint output_lut;
 	float output_lut_dim;
 	pixman_region32_t updated_region;
+	// Set while an add_* call renders into an offscreen buffer instead of the
+	// pass target, so it must not extend updated_region.
+	bool suppress_updated;
 
 	// The region where there's blur
 	pixman_region32_t blur_padding_region;

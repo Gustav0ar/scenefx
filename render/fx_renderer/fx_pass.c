@@ -404,7 +404,7 @@ static void setup_blending(enum wlr_render_blend_mode mode) {
 
 static void render_pass_mark_updated(struct fx_gles_render_pass *pass,
 		const struct wlr_box *box, const pixman_region32_t *clip) {
-	if (!pass->has_color_transform) {
+	if (!pass->has_color_transform || pass->suppress_updated) {
 		return;
 	}
 	pixman_region32_t region;
@@ -1568,9 +1568,12 @@ void fx_render_pass_read_to_buffer(struct fx_gles_render_pass *pass,
 		goto done;
 	}
 
-	// Draw onto the dst_buffer
-	fx_framebuffer_bind(dst_buffer);
-	wlr_render_pass_add_texture(&pass->base, &(struct wlr_render_texture_options) {
+	// These buffers hold whatever the pass target holds, so the copy must not
+	// convert anything. In two-pass mode that is linear light: leaving the
+	// transfer function unset would make the texture path treat the source as
+	// sRGB-encoded and decode it, darkening the copied region on every hop.
+	// EXT_LINEAR selects the identity conversion.
+	struct wlr_render_texture_options options = {
 		.texture = src_tex,
 		.clip = &region,
 		.transform = WL_OUTPUT_TRANSFORM_NORMAL,
@@ -1587,7 +1590,18 @@ void fx_render_pass_read_to_buffer(struct fx_gles_render_pass *pass,
 			.width = src_buffer->buffer->width,
 			.height = src_buffer->buffer->height,
 		},
-	});
+	};
+	if (pass->has_color_transform) {
+		options.transfer_function = WLR_COLOR_TRANSFER_FUNCTION_EXT_LINEAR;
+	}
+
+	// Draw onto the dst_buffer. Only the pass target feeds the output
+	// transform, so a copy into an offscreen buffer must not extend the
+	// region that gets copied out at submit time.
+	pass->suppress_updated = dst_buffer != pass->buffer;
+	fx_framebuffer_bind(dst_buffer);
+	wlr_render_pass_add_texture(&pass->base, &options);
+	pass->suppress_updated = false;
 	wlr_texture_destroy(src_tex);
 
 	// Bind back to the main WLR buffer

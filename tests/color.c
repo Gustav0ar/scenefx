@@ -22,6 +22,7 @@
 #include "render/color.h"
 #include "render/fx_renderer/fx_renderer.h"
 #include "scenefx/render/fx_renderer/fx_renderer.h"
+#include "scenefx/render/fx_renderer/fx_offscreen_buffers.h"
 #include "scenefx/render/pass.h"
 #include "scenefx/types/fx/blur_data.h"
 
@@ -177,7 +178,7 @@ static bool render_texture(struct fixture *fixture, int width, int height,
 		const struct wlr_color_primaries *input_primaries,
 		const float *luminance_multiplier,
 		struct wlr_color_transform *output_transform,
-		struct blur_data *blur_data,
+		struct blur_data *blur_data, bool save_restore,
 		uint32_t read_format, uint32_t read_stride, void *read_data) {
 	struct wlr_texture *texture = wlr_texture_from_pixels(fixture->renderer,
 		input_format, input_stride, 1, 1, input_data);
@@ -243,6 +244,21 @@ static bool render_texture(struct fixture *fixture, int width, int height,
 				.blur_strength = 1.0f,
 			};
 			fx_render_pass_add_blur(fx_get_render_pass(pass), &blur_options);
+		}
+	}
+	if (ok && save_restore) {
+		// Mirror the blur-artifact compensation in wlr_scene_output_build_state:
+		// the padding pixels are copied out of the pass target before the scene
+		// renders and copied back afterwards.
+		struct fx_gles_render_pass *fx_pass = fx_get_render_pass(pass);
+		ok = check(fx_render_pass_init_offscreen_buffers(
+			pass, fixture->output), "initialize save/restore buffers");
+		if (ok) {
+			fx_render_pass_read_to_buffer(fx_pass, &region,
+				fx_pass->fx_offscreen_buffers->blur_saved_pixels_buffer,
+				fx_pass->buffer);
+			fx_render_pass_read_to_buffer(fx_pass, &region, fx_pass->buffer,
+				fx_pass->fx_offscreen_buffers->blur_saved_pixels_buffer);
 		}
 	}
 	pixman_region32_fini(&region);
@@ -358,13 +374,13 @@ static bool test_legacy_gamma22_target(struct fixture *fixture) {
 		render_texture(fixture, 1, 1, DRM_FORMAT_ABGR8888,
 			DRM_FORMAT_ABGR8888, 4, input,
 			WLR_COLOR_TRANSFER_FUNCTION_GAMMA22, &srgb,
-			NULL, NULL, NULL, DRM_FORMAT_ABGR8888, 4,
+			NULL, NULL, NULL, false, DRM_FORMAT_ABGR8888, 4,
 			implicit_output) &&
 		codes_close(implicit_output, input, 0) &&
 		render_texture(fixture, 1, 1, DRM_FORMAT_ABGR8888,
 			DRM_FORMAT_ABGR8888, 4, input,
 			WLR_COLOR_TRANSFER_FUNCTION_GAMMA22, &srgb,
-			NULL, transform, NULL, DRM_FORMAT_ABGR8888, 4,
+			NULL, transform, NULL, false, DRM_FORMAT_ABGR8888, 4,
 			explicit_output) &&
 		codes_close(explicit_output, implicit_output, 1);
 	wlr_color_transform_unref(transform);
@@ -385,7 +401,7 @@ static bool test_srgb_to_gamma22(struct fixture *fixture) {
 	wlr_color_primaries_from_named(&srgb, WLR_COLOR_NAMED_PRIMARIES_SRGB);
 	return render_texture(fixture, 1, 1, DRM_FORMAT_ABGR8888,
 		DRM_FORMAT_ABGR8888, 4, input, WLR_COLOR_TRANSFER_FUNCTION_SRGB,
-		&srgb, NULL, NULL, NULL, DRM_FORMAT_ABGR8888, 4, output) &&
+		&srgb, NULL, NULL, NULL, false, DRM_FORMAT_ABGR8888, 4, output) &&
 		codes_close(output, expected, 1);
 }
 
@@ -403,7 +419,7 @@ static bool test_pq_roundtrip(struct fixture *fixture) {
 		render_texture(fixture, 1, 1, DRM_FORMAT_ABGR8888,
 			DRM_FORMAT_ABGR8888, 4, input,
 			WLR_COLOR_TRANSFER_FUNCTION_ST2084_PQ, &bt2020,
-			&input_luminance, transform, NULL,
+			&input_luminance, transform, NULL, false,
 			DRM_FORMAT_ABGR8888, 4, output) &&
 		codes_close(output, input, 1);
 	wlr_color_transform_unref(transform);
@@ -441,7 +457,7 @@ static bool test_bt2020_to_srgb(struct fixture *fixture) {
 		render_texture(fixture, 1, 1, DRM_FORMAT_ABGR8888,
 			DRM_FORMAT_ABGR8888, 4, input,
 			WLR_COLOR_TRANSFER_FUNCTION_SRGB, &bt2020, NULL,
-			transform, NULL, DRM_FORMAT_ABGR8888, 4, output) &&
+			transform, NULL, false, DRM_FORMAT_ABGR8888, 4, output) &&
 		codes_close(output, expected, 1);
 	wlr_color_transform_unref(transform);
 	return ok;
@@ -483,7 +499,7 @@ static bool test_fp16(struct fixture *fixture, bool blur) {
 		render_texture(fixture, TEST_WIDTH, TEST_HEIGHT, format,
 			DRM_FORMAT_ABGR16161616F, sizeof(input), input,
 			WLR_COLOR_TRANSFER_FUNCTION_EXT_LINEAR, NULL, NULL,
-			transform, blur ? &blur_options : NULL, format,
+			transform, blur ? &blur_options : NULL, false, format,
 			TEST_WIDTH * sizeof(uint32_t), output);
 	wlr_color_transform_unref(transform);
 	if (!ok) {
@@ -527,7 +543,7 @@ static bool test_fp16_blur_effects(struct fixture *fixture) {
 		render_texture(fixture, TEST_WIDTH, TEST_HEIGHT, format,
 			DRM_FORMAT_ABGR16161616F, sizeof(input), input,
 			WLR_COLOR_TRANSFER_FUNCTION_EXT_LINEAR, NULL, NULL,
-			transform, &blur_options, format,
+			transform, &blur_options, false, format,
 			TEST_WIDTH * sizeof(uint32_t), output);
 	wlr_color_transform_unref(transform);
 	if (!ok) {
@@ -543,6 +559,45 @@ static bool test_fp16_blur_effects(struct fixture *fixture) {
 	int actual = pixel & 0x3FF;
 	return check(abs(actual - expected) <= 6,
 		"FP16 blur effects preserve gamma-space brightness");
+}
+
+// The blur-artifact compensation copies the pass target into a scratch buffer
+// and back. In two-pass mode the pass target holds linear light, so the copy
+// must be lossless: any transfer-function conversion darkens the padding
+// region around every blur node.
+static bool test_fp16_save_restore(struct fixture *fixture) {
+	uint32_t format = select_10bit_format(fixture);
+	if (!check(format != DRM_FORMAT_INVALID, "find 10-bit output format")) {
+		return false;
+	}
+	const float input_linear = 0.2f;
+	const uint16_t input[4] = {
+		float_to_half(input_linear),
+		float_to_half(input_linear),
+		float_to_half(input_linear),
+		float_to_half(1.0f),
+	};
+	uint32_t output[TEST_WIDTH * TEST_HEIGHT] = {0};
+	struct wlr_color_transform *transform = create_output_transform(
+		WLR_COLOR_NAMED_PRIMARIES_SRGB,
+		WLR_COLOR_TRANSFER_FUNCTION_ST2084_PQ, 203.0f / 10000.0f);
+	bool ok = check(transform != NULL, "create FP16 save/restore output transform") &&
+		render_texture(fixture, TEST_WIDTH, TEST_HEIGHT, format,
+			DRM_FORMAT_ABGR16161616F, sizeof(input), input,
+			WLR_COLOR_TRANSFER_FUNCTION_EXT_LINEAR, NULL, NULL,
+			transform, NULL, true, format,
+			TEST_WIDTH * sizeof(uint32_t), output);
+	wlr_color_transform_unref(transform);
+	if (!ok) {
+		return false;
+	}
+
+	int expected = lroundf(linear_to_pq(
+		input_linear * 203.0f / 10000.0f) * 1023.0f);
+	uint32_t pixel = output[(TEST_HEIGHT / 2) * TEST_WIDTH + TEST_WIDTH / 2];
+	int actual = pixel & 0x3FF;
+	return check(abs(actual - expected) <= 2,
+		"FP16 save/restore round trip preserves luminance");
 }
 
 int main(int argc, char *argv[]) {
@@ -573,6 +628,8 @@ int main(int argc, char *argv[]) {
 		ok = test_fp16(&fixture, true);
 	} else if (strcmp(argv[1], "fp16-blur-effects") == 0) {
 		ok = test_fp16_blur_effects(&fixture);
+	} else if (strcmp(argv[1], "fp16-save-restore") == 0) {
+		ok = test_fp16_save_restore(&fixture);
 	} else {
 		fprintf(stderr, "unknown case: %s\n", argv[1]);
 		ok = false;

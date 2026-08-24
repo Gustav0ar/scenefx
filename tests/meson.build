@@ -14,6 +14,7 @@ foreach case_name : [
 	'fp16-blending',
 	'fp16-blur',
 	'fp16-blur-effects',
+	'fp16-save-restore',
 ]
 	test(
 		'color-' + case_name,
