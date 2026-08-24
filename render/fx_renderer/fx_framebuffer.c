@@ -201,12 +201,25 @@ void fx_framebuffer_destroy(struct fx_framebuffer *fx_buffer) {
 
 	if (fx_buffer->blend_buffer != NULL) {
 		struct wlr_buffer *blend_buffer = fx_buffer->blend_buffer->buffer;
+		fx_buffer->blend_buffer->blend_parent = NULL;
 		fx_buffer->blend_buffer = NULL;
 		wlr_buffer_drop(blend_buffer);
 	}
 	if (fx_buffer->blend_parent != NULL) {
 		fx_buffer->blend_parent->blend_buffer = NULL;
 		fx_buffer->blend_parent = NULL;
+	}
+	if (fx_buffer->sdr_capture_buffer != NULL) {
+		struct wlr_buffer *capture_buffer =
+			fx_buffer->sdr_capture_buffer->buffer;
+		fx_buffer->sdr_capture_buffer->sdr_capture_parent = NULL;
+		fx_buffer->sdr_capture_buffer = NULL;
+		wlr_buffer_drop(capture_buffer);
+	}
+	if (fx_buffer->sdr_capture_parent != NULL) {
+		fx_buffer->sdr_capture_parent->sdr_capture_buffer = NULL;
+		fx_buffer->sdr_capture_parent->sdr_capture_valid = false;
+		fx_buffer->sdr_capture_parent = NULL;
 	}
 
 	// Release the framebuffer

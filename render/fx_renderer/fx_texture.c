@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <wlr/render/interface.h>
+#include <wlr/render/pass.h>
 #include <wlr/types/wlr_buffer.h>
 #include <wlr/util/log.h>
 #include <drm_fourcc.h>
@@ -102,7 +103,7 @@ static bool fx_texture_update_from_buffer(struct wlr_texture *wlr_texture,
 void fx_texture_destroy(struct fx_texture *texture) {
 	wl_list_remove(&texture->link);
 	if (texture->buffer != NULL) {
-		wlr_buffer_unlock(texture->buffer->buffer);
+		wlr_buffer_unlock(texture->locked_buffer);
 	} else {
 		struct wlr_egl_context prev_ctx;
 		wlr_egl_make_current(texture->fx_renderer->egl, &prev_ctx);
@@ -360,29 +361,22 @@ static struct wlr_texture *fx_texture_from_pixels(
 	return &texture->wlr_texture;
 }
 
-static struct wlr_texture *fx_texture_from_dmabuf(
-		struct wlr_renderer *wlr_renderer, struct wlr_buffer *wlr_buffer,
-		struct wlr_dmabuf_attributes *attribs) {
-	struct fx_renderer *renderer = fx_get_renderer(wlr_renderer);
-
+static struct wlr_texture *fx_texture_from_framebuffer(
+		struct fx_renderer *renderer, struct fx_framebuffer *buffer,
+		struct wlr_buffer *locked_buffer) {
 	if (!renderer->procs.glEGLImageTargetTexture2DOES) {
 		return NULL;
 	}
 
-	struct fx_framebuffer *buffer = fx_framebuffer_get_or_create(renderer, wlr_buffer);
-	if (!buffer) {
-		return NULL;
-	}
-
 	struct fx_texture *texture =
-		fx_texture_create(renderer, attribs->width, attribs->height);
+		fx_texture_create(renderer, buffer->buffer->width, buffer->buffer->height);
 	if (texture == NULL) {
 		return NULL;
 	}
 	texture->target = buffer->external_only ? GL_TEXTURE_EXTERNAL_OES : GL_TEXTURE_2D;
 	texture->buffer = buffer;
 	texture->drm_format = DRM_FORMAT_INVALID; // texture can't be written anyways
-	texture->has_alpha = pixel_format_has_alpha(attribs->format);
+	texture->has_alpha = pixel_format_has_alpha(buffer->drm_format);
 
 	struct wlr_egl_context prev_ctx;
 	wlr_egl_make_current(renderer->egl, &prev_ctx);
@@ -409,8 +403,101 @@ static struct wlr_texture *fx_texture_from_dmabuf(
 	wlr_egl_restore_context(&prev_ctx);
 
 	texture->tex = buffer->tex;
-	wlr_buffer_lock(texture->buffer->buffer);
+	texture->locked_buffer = wlr_buffer_lock(locked_buffer);
 	return &texture->wlr_texture;
+}
+
+static uint32_t get_sdr_capture_format(struct fx_renderer *renderer) {
+	const struct wlr_drm_format_set *render_formats =
+		wlr_egl_get_dmabuf_render_formats(renderer->egl);
+	const struct wlr_drm_format_set *texture_formats =
+		wlr_renderer_get_texture_formats(&renderer->wlr_renderer,
+			renderer->wlr_renderer.render_buffer_caps);
+	const uint32_t candidates[] = {
+		DRM_FORMAT_XRGB8888,
+		DRM_FORMAT_XBGR8888,
+		DRM_FORMAT_ARGB8888,
+		DRM_FORMAT_ABGR8888,
+	};
+	for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
+		if (wlr_drm_format_set_get(render_formats, candidates[i]) != NULL &&
+				wlr_drm_format_set_get(texture_formats, candidates[i]) != NULL) {
+			return candidates[i];
+		}
+	}
+	return DRM_FORMAT_INVALID;
+}
+
+static bool update_sdr_capture_buffer(struct fx_framebuffer *output_buffer) {
+	if (output_buffer->sdr_capture_valid) {
+		return true;
+	}
+	if (output_buffer->blend_buffer == NULL) {
+		return false;
+	}
+
+	struct fx_renderer *renderer = output_buffer->renderer;
+	uint32_t format = get_sdr_capture_format(renderer);
+	if (format == DRM_FORMAT_INVALID) {
+		wlr_log(WLR_ERROR, "No 8-bit format available for SDR capture");
+		return false;
+	}
+
+	bool failed = false;
+	fx_framebuffer_get_or_create_custom(renderer, renderer->allocator,
+		output_buffer->buffer->width, output_buffer->buffer->height, format,
+		&output_buffer->sdr_capture_buffer, &failed);
+	if (failed || output_buffer->sdr_capture_buffer == NULL) {
+		return false;
+	}
+	output_buffer->sdr_capture_buffer->sdr_capture_parent = output_buffer;
+
+	struct wlr_texture *texture = fx_texture_from_framebuffer(renderer,
+		output_buffer->blend_buffer, output_buffer->blend_buffer->buffer);
+	if (texture == NULL) {
+		return false;
+	}
+
+	struct wlr_render_pass *pass = wlr_renderer_begin_buffer_pass(
+		&renderer->wlr_renderer, output_buffer->sdr_capture_buffer->buffer, NULL);
+	if (pass == NULL) {
+		wlr_texture_destroy(texture);
+		return false;
+	}
+
+	struct wlr_box box = {
+		.width = output_buffer->buffer->width,
+		.height = output_buffer->buffer->height,
+	};
+	wlr_render_pass_add_texture(pass, &(struct wlr_render_texture_options) {
+		.texture = texture,
+		.dst_box = box,
+		.filter_mode = WLR_SCALE_FILTER_NEAREST,
+		.blend_mode = WLR_RENDER_BLEND_MODE_NONE,
+		.transfer_function = WLR_COLOR_TRANSFER_FUNCTION_EXT_LINEAR,
+	});
+	output_buffer->sdr_capture_valid = wlr_render_pass_submit(pass);
+	wlr_texture_destroy(texture);
+	return output_buffer->sdr_capture_valid;
+}
+
+static struct wlr_texture *fx_texture_from_dmabuf(
+		struct wlr_renderer *wlr_renderer, struct wlr_buffer *wlr_buffer) {
+	struct fx_renderer *renderer = fx_get_renderer(wlr_renderer);
+	struct fx_framebuffer *buffer =
+		fx_framebuffer_get_or_create(renderer, wlr_buffer);
+	if (buffer == NULL) {
+		return NULL;
+	}
+
+	struct fx_framebuffer *texture_buffer = buffer;
+	if (buffer->capture_sdr) {
+		if (!update_sdr_capture_buffer(buffer)) {
+			return NULL;
+		}
+		texture_buffer = buffer->sdr_capture_buffer;
+	}
+	return fx_texture_from_framebuffer(renderer, texture_buffer, wlr_buffer);
 }
 
 struct wlr_texture *fx_texture_from_buffer(struct wlr_renderer *wlr_renderer,
@@ -422,7 +509,7 @@ struct wlr_texture *fx_texture_from_buffer(struct wlr_renderer *wlr_renderer,
 	size_t stride;
 	struct wlr_dmabuf_attributes dmabuf;
 	if (wlr_buffer_get_dmabuf(buffer, &dmabuf)) {
-		return fx_texture_from_dmabuf(&renderer->wlr_renderer, buffer, &dmabuf);
+		return fx_texture_from_dmabuf(&renderer->wlr_renderer, buffer);
 	} else if (wlr_buffer_begin_data_ptr_access(buffer,
 			WLR_BUFFER_DATA_PTR_ACCESS_READ, &data, &format, &stride)) {
 		struct wlr_texture *tex = fx_texture_from_pixels(wlr_renderer,

@@ -48,6 +48,10 @@ struct fx_framebuffer {
 	uint32_t drm_format;
 	struct fx_framebuffer *blend_buffer;
 	struct fx_framebuffer *blend_parent;
+	struct fx_framebuffer *sdr_capture_buffer;
+	struct fx_framebuffer *sdr_capture_parent;
+	bool capture_sdr;
+	bool sdr_capture_valid;
 
 	EGLImageKHR image;
 	GLuint rbo;
@@ -98,6 +102,7 @@ struct fx_texture {
 
 	uint32_t drm_format; // for mutable textures only, used to interpret upload data
 	struct fx_framebuffer *buffer; // for DMA-BUF imports only
+	struct wlr_buffer *locked_buffer;
 };
 
 struct fx_texture *fx_get_texture(struct wlr_texture *wlr_texture);

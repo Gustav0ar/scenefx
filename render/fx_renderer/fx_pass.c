@@ -1633,6 +1633,8 @@ struct fx_gles_render_pass *fx_begin_buffer_pass(struct fx_framebuffer *buffer,
 	struct fx_renderer *renderer = buffer->renderer;
 	struct wlr_buffer *wlr_buffer = buffer->buffer;
 	const bool has_color_transform = color_transform != NULL;
+	buffer->capture_sdr = false;
+	buffer->sdr_capture_valid = false;
 
 	if (renderer->procs.glGetGraphicsResetStatusKHR) {
 		GLenum status = renderer->procs.glGetGraphicsResetStatusKHR();

@@ -897,6 +897,12 @@ struct wlr_scene_output_state_options {
 	struct wlr_scene_timer *timer;
 
 	/**
+	 * Make imports of the rendered output buffer expose an SDR capture view
+	 * when an output color transform is active.
+	 */
+	bool capture_sdr;
+
+	/**
 	 * Color transform to apply before the output's color transform. Cannot be
 	 * used when the output has a non-NULL image description set.
 	 */

@@ -3422,7 +3422,8 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
 	// - There are no color transforms that need to be applied
 	// - Damage highlight debugging is not enabled
 	enum scene_direct_scanout_result scanout_result = SCANOUT_INELIGIBLE;
-	if (options->color_transform == NULL && !render_gamma_lut && list_len == 1
+	if (!options->capture_sdr && options->color_transform == NULL
+			&& !render_gamma_lut && list_len == 1
 			&& debug_damage != WLR_SCENE_DEBUG_DAMAGE_HIGHLIGHT) {
 		scanout_result = scene_entry_try_direct_scanout(&list_data[0], state, &render_data);
 	}
@@ -3525,6 +3526,8 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
 		&render_data.damage);
 
 	struct fx_gles_render_pass *fx_pass = fx_get_render_pass(render_pass);
+	fx_pass->output_buffer->capture_sdr =
+		options->capture_sdr && fx_pass->has_color_transform;
 	bool should_compensate_blur = false;
 	if (pixman_region32_not_empty(&render_data.damage)) {
 		// Blur artifact prevention
