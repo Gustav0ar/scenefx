@@ -7,7 +7,8 @@ color_test = executable(
 )
 
 foreach case_name : [
-	'null-transform',
+	'legacy-gamma22-target',
+	'srgb-to-gamma22',
 	'pq-roundtrip',
 	'bt2020-to-srgb',
 	'fp16-blending',

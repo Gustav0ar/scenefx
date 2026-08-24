@@ -31,7 +31,7 @@ uniform float alpha;
 uniform int source_tf;
 uniform mat3 primaries_matrix;
 uniform float lum_multiplier;
-uniform int encode_srgb;
+uniform int target_tf;
 
 #define TRANSFER_FUNCTION_PASSTHROUGH 0
 #define TRANSFER_FUNCTION_SRGB 1
@@ -117,6 +117,10 @@ vec3 linear_color_to_srgb(vec3 color) {
 	);
 }
 
+vec3 linear_color_to_gamma22(vec3 color) {
+	return pow(max(color, vec3(0.0)), vec3(1.0 / 2.2));
+}
+
 vec4 convert_color(vec4 color) {
 	if (source_tf == TRANSFER_FUNCTION_PASSTHROUGH) {
 		return color;
@@ -138,8 +142,10 @@ vec4 convert_color(vec4 color) {
 
 	rgb *= lum_multiplier;
 	rgb = primaries_matrix * rgb;
-	if (encode_srgb != 0) {
+	if (target_tf == TRANSFER_FUNCTION_SRGB) {
 		rgb = linear_color_to_srgb(max(rgb, vec3(0.0)));
+	} else if (target_tf == TRANSFER_FUNCTION_GAMMA22) {
+		rgb = linear_color_to_gamma22(rgb);
 	}
 
 	return vec4(rgb * color_alpha, color_alpha);

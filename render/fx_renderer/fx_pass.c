@@ -733,13 +733,14 @@ void fx_render_pass_add_texture(struct fx_gles_render_pass *pass,
 		: 1.0f;
 	const bool primaries_passthrough = options->primaries == NULL ||
 		color_primaries_equal(options->primaries, &primaries_srgb);
-	const bool color_passthrough = !pass->has_color_transform &&
-		(options->transfer_function == 0 ||
-		 options->transfer_function == WLR_COLOR_TRANSFER_FUNCTION_SRGB) &&
-		primaries_passthrough && lum_multiplier == 1.0f;
 	const enum wlr_color_transfer_function source_tf = options->transfer_function != 0
 		? options->transfer_function
-		: WLR_COLOR_TRANSFER_FUNCTION_SRGB;
+		: WLR_COLOR_TRANSFER_FUNCTION_GAMMA22;
+	const enum wlr_color_transfer_function target_tf = pass->has_color_transform
+		? WLR_COLOR_TRANSFER_FUNCTION_EXT_LINEAR
+		: WLR_COLOR_TRANSFER_FUNCTION_GAMMA22;
+	const bool color_passthrough = source_tf == target_tf &&
+		primaries_passthrough && lum_multiplier == 1.0f;
 
 	float primaries_matrix[9];
 	if (primaries_passthrough) {
@@ -753,7 +754,7 @@ void fx_render_pass_add_texture(struct fx_gles_render_pass *pass,
 	glUniform1i(shader->source_tf, color_passthrough ? 0 : source_tf);
 	glUniformMatrix3fv(shader->primaries_matrix, 1, GL_FALSE, primaries_matrix);
 	glUniform1f(shader->lum_multiplier, lum_multiplier);
-	glUniform1i(shader->encode_srgb, !color_passthrough && !pass->has_color_transform);
+	glUniform1i(shader->target_tf, color_passthrough ? 0 : target_tf);
 
 	glUniform1f(shader->discard_transparent, fx_options->discard_transparent);
 
