@@ -407,27 +407,6 @@ static struct wlr_texture *fx_texture_from_framebuffer(
 	return &texture->wlr_texture;
 }
 
-static uint32_t get_sdr_capture_format(struct fx_renderer *renderer) {
-	const struct wlr_drm_format_set *render_formats =
-		wlr_egl_get_dmabuf_render_formats(renderer->egl);
-	const struct wlr_drm_format_set *texture_formats =
-		wlr_renderer_get_texture_formats(&renderer->wlr_renderer,
-			renderer->wlr_renderer.render_buffer_caps);
-	const uint32_t candidates[] = {
-		DRM_FORMAT_XRGB8888,
-		DRM_FORMAT_XBGR8888,
-		DRM_FORMAT_ARGB8888,
-		DRM_FORMAT_ABGR8888,
-	};
-	for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
-		if (wlr_drm_format_set_get(render_formats, candidates[i]) != NULL &&
-				wlr_drm_format_set_get(texture_formats, candidates[i]) != NULL) {
-			return candidates[i];
-		}
-	}
-	return DRM_FORMAT_INVALID;
-}
-
 static bool update_sdr_capture_buffer(struct fx_framebuffer *output_buffer) {
 	if (output_buffer->sdr_capture_valid) {
 		return true;
@@ -437,16 +416,17 @@ static bool update_sdr_capture_buffer(struct fx_framebuffer *output_buffer) {
 	}
 
 	struct fx_renderer *renderer = output_buffer->renderer;
-	uint32_t format = get_sdr_capture_format(renderer);
-	if (format == DRM_FORMAT_INVALID) {
-		wlr_log(WLR_ERROR, "No 8-bit format available for SDR capture");
-		return false;
-	}
+	uint32_t format = output_buffer->drm_format;
 
 	bool failed = false;
+	struct wlr_egl_context prev_ctx;
+	if (!wlr_egl_make_current(renderer->egl, &prev_ctx)) {
+		return false;
+	}
 	fx_framebuffer_get_or_create_custom(renderer, renderer->allocator,
 		output_buffer->buffer->width, output_buffer->buffer->height, format,
 		&output_buffer->sdr_capture_buffer, &failed);
+	wlr_egl_restore_context(&prev_ctx);
 	if (failed || output_buffer->sdr_capture_buffer == NULL) {
 		return false;
 	}
