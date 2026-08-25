@@ -281,6 +281,12 @@ struct wlr_scene_buffer {
 
 	struct fx_corner_radii corners;
 	struct linked_node blur;
+
+	/**
+	 * Additional luminance scaling applied while compositing this buffer.
+	 * The identity value is 1.0.
+	 */
+	float luminance_multiplier;
 };
 
 /** A viewport for an output in the scene-graph */
@@ -854,6 +860,9 @@ void wlr_scene_buffer_set_transfer_function(struct wlr_scene_buffer *scene_buffe
 
 void wlr_scene_buffer_set_primaries(struct wlr_scene_buffer *scene_buffer,
 	enum wlr_color_named_primaries primaries);
+
+void wlr_scene_buffer_set_luminance_multiplier(
+	struct wlr_scene_buffer *scene_buffer, float multiplier);
 
 void wlr_scene_buffer_set_color_encoding(struct wlr_scene_buffer *scene_buffer,
 	enum wlr_color_encoding encoding);

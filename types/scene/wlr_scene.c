@@ -1482,6 +1482,7 @@ struct wlr_scene_buffer *wlr_scene_buffer_create(struct wlr_scene_tree *parent,
 	wl_list_init(&scene_buffer->buffer_release.link);
 	wl_list_init(&scene_buffer->renderer_destroy.link);
 	scene_buffer->opacity = 1;
+	scene_buffer->luminance_multiplier = 1.0f;
 
 	scene_buffer->corners = corner_radii_none();
 
@@ -1762,6 +1763,17 @@ void wlr_scene_buffer_set_primaries(struct wlr_scene_buffer *scene_buffer,
 	}
 
 	scene_buffer->primaries = primaries;
+	scene_node_update(&scene_buffer->node, NULL);
+}
+
+void wlr_scene_buffer_set_luminance_multiplier(
+		struct wlr_scene_buffer *scene_buffer, float multiplier) {
+	assert(isfinite(multiplier) && multiplier > 0.0f);
+	if (scene_buffer->luminance_multiplier == multiplier) {
+		return;
+	}
+
+	scene_buffer->luminance_multiplier = multiplier;
 	scene_node_update(&scene_buffer->node, NULL);
 }
 
@@ -2264,6 +2276,7 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 		wlr_color_transfer_function_get_default_luminance(
 			WLR_COLOR_TRANSFER_FUNCTION_SRGB, &srgb_lum);
 		float luminance_multiplier = get_luminance_multiplier(&src_lum, &srgb_lum);
+		luminance_multiplier *= scene_buffer->luminance_multiplier;
 
 		// When clipping (e.g. to XDG geometry for CSD), wlroots'
 		// surface_reconfigure computes src_box with fractional texel
@@ -2911,6 +2924,10 @@ static void scene_buffer_send_dmabuf_feedback(const struct wlr_scene *scene,
 
 static bool color_management_is_scanout_allowed(const struct wlr_output_image_description *img_desc,
 		const struct wlr_scene_buffer *buffer) {
+	if (buffer->luminance_multiplier != 1.0f) {
+		return false;
+	}
+
 	// Disallow scanout if the output has colorimetry information but buffer
 	// doesn't; allow it only if the output also lacks it.
 	if (buffer->transfer_function == 0 && buffer->primaries == 0) {
