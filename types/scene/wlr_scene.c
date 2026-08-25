@@ -3153,6 +3153,12 @@ static bool apply_blur_region(struct wlr_scene_node *node, struct blur_data *blu
 	pixman_region32_t intersection;
 	pixman_region32_init(&intersection);
 	if (pixman_region32_intersect(&intersection, &expanded_damage, &node_visible_region)) {
+		struct wlr_output *output = render_data->output->output;
+		pixman_region32_intersect_rect(&intersection, &intersection,
+			0, 0, output->width, output->height);
+	}
+
+	if (!pixman_region32_empty(&intersection)) {
 		should_compensate_blur = true;
 
 		// Expand the render damage to re-render surrounding blur nodes
@@ -3555,9 +3561,15 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
 
 		// Only compensate for blur artifacts when the damage doesn't span
 		// the whole output
+		const pixman_box32_t output_box = {
+			.x1 = 0,
+			.y1 = 0,
+			.x2 = buffer->width,
+			.y2 = buffer->height,
+		};
 		const bool full_damage =
-			original_damage.extents.x2 - original_damage.extents.x1 >= output->width
-			&& original_damage.extents.y2 - original_damage.extents.y1 >= output->height;
+			pixman_region32_contains_rectangle(&original_damage, &output_box) ==
+			PIXMAN_REGION_IN;
 
 		// The extra region we copy and paste onto the framebuffer after render
 		// for artifact removal
