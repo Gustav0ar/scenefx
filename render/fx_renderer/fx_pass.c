@@ -1300,11 +1300,14 @@ static struct fx_framebuffer *get_main_buffer_blur(struct fx_gles_render_pass *p
 	}
 	fx_options->blur_data = &blur_data;
 
+	// The clip and current buffer are already in physical render-target
+	// coordinates. The incoming transform belongs to the optional surface mask
+	// and must not rotate either the full-framebuffer samples or their damage.
+	fx_options->tex_options.base.transform = WL_OUTPUT_TRANSFORM_NORMAL;
+
 	pixman_region32_t damage;
 	pixman_region32_init(&damage);
 	pixman_region32_copy(&damage, fx_options->tex_options.base.clip);
-	wlr_region_transform(&damage, &damage, fx_options->tex_options.base.transform,
-			buffer_bounds.width, buffer_bounds.height);
 
 	wlr_region_expand(&damage, &damage, blur_data_calc_size(&blur_data));
 	// Make sure that the region doesn't expand past the buffer bounds
