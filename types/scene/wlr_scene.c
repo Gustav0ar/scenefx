@@ -179,6 +179,7 @@ void wlr_scene_node_destroy(struct wlr_scene_node *node) {
 			wl_list_remove(&scene->linux_dmabuf_v1_destroy.link);
 			wl_list_remove(&scene->gamma_control_manager_v1_destroy.link);
 			wl_list_remove(&scene->gamma_control_manager_v1_set_gamma.link);
+			wl_list_remove(&scene->color_manager_v1_destroy.link);
 		} else {
 			assert(node->parent);
 		}
@@ -219,6 +220,7 @@ struct wlr_scene *wlr_scene_create(void) {
 	wl_list_init(&scene->linux_dmabuf_v1_destroy.link);
 	wl_list_init(&scene->gamma_control_manager_v1_destroy.link);
 	wl_list_init(&scene->gamma_control_manager_v1_set_gamma.link);
+	wl_list_init(&scene->color_manager_v1_destroy.link);
 
 	scene->restack_xwayland_surfaces = true;
 
