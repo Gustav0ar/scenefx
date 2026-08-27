@@ -455,26 +455,40 @@ static float *pass_gradient_colors(struct fx_gles_render_pass *pass,
 
 static bool apply_clip_region(pixman_region32_t *clip_region,
 		const struct wlr_box *clipped_region_box, const struct fx_corner_fradii *corners) {
-	if (!wlr_box_empty(clipped_region_box)) {
-		float top = fmax(corners->top_left, corners->top_right);
-		float bottom = fmax(corners->bottom_left, corners->bottom_right);
-		float left = fmax(corners->top_left, corners->bottom_left);
-		float right = fmax(corners->top_right, corners->bottom_right);
-
-		pixman_region32_t user_clip_region;
-		pixman_region32_init_rect(
-			&user_clip_region,
-			clipped_region_box->x + (left * 0.3),
-			clipped_region_box->y + (top * 0.3),
-			fmax(clipped_region_box->width - (left + right) * 0.3, 0),
-			fmax(clipped_region_box->height - (top + bottom) * 0.3, 0)
-		);
-		pixman_region32_subtract(clip_region, clip_region, &user_clip_region);
-		pixman_region32_fini(&user_clip_region);
-		return true;
+	if (wlr_box_empty(clipped_region_box)) {
+		return false;
 	}
 
-	return false;
+	// The shader owns the rounded boundary. Remove only the central cross that
+	// is certainly inside the hole, leaving every corner pixel for exact GPU
+	// coverage. Truncating a diagonal approximation can otherwise cull a pixel
+	// that the rounded shader needs to paint.
+	const int top = ceilf(fmax(corners->top_left, corners->top_right));
+	const int bottom = ceilf(fmax(corners->bottom_left, corners->bottom_right));
+	const int left = ceilf(fmax(corners->top_left, corners->bottom_left));
+	const int right = ceilf(fmax(corners->top_right, corners->bottom_right));
+
+	const int horizontal_height = clipped_region_box->height - top - bottom;
+	if (horizontal_height > 0) {
+		pixman_region32_t horizontal;
+		pixman_region32_init_rect(&horizontal,
+			clipped_region_box->x, clipped_region_box->y + top,
+			clipped_region_box->width, horizontal_height);
+		pixman_region32_subtract(clip_region, clip_region, &horizontal);
+		pixman_region32_fini(&horizontal);
+	}
+
+	const int vertical_width = clipped_region_box->width - left - right;
+	if (vertical_width > 0) {
+		pixman_region32_t vertical;
+		pixman_region32_init_rect(&vertical,
+			clipped_region_box->x + left, clipped_region_box->y,
+			vertical_width, clipped_region_box->height);
+		pixman_region32_subtract(clip_region, clip_region, &vertical);
+		pixman_region32_fini(&vertical);
+	}
+
+	return true;
 }
 
 static bool color_primaries_equal(const struct wlr_color_primaries *a,
@@ -988,6 +1002,55 @@ void fx_render_pass_add_rounded_rect(struct fx_gles_render_pass *pass,
 	render(&box, &clip_region, renderer->shaders.quad_round.pos_attrib);
 	pixman_region32_fini(&clip_region);
 
+	pop_fx_debug(renderer);
+	TRACY_BOTH_ZONES_END;
+}
+
+void fx_render_pass_add_border(struct fx_gles_render_pass *pass,
+		const struct fx_render_border_options *options) {
+	struct fx_renderer *renderer = pass->buffer->renderer;
+	const struct wlr_render_color inner_color =
+		pass_color(pass, &options->inner_color);
+	const struct wlr_render_color outer_color =
+		pass_color(pass, &options->outer_color);
+
+	pixman_region32_t clip_region;
+	if (options->clip != NULL) {
+		pixman_region32_init(&clip_region);
+		pixman_region32_copy(&clip_region, options->clip);
+	} else {
+		pixman_region32_init_rect(&clip_region,
+			options->box.x, options->box.y,
+			options->box.width, options->box.height);
+	}
+	apply_clip_region(&clip_region,
+		&options->clipped_region.area, &options->clipped_region.corners);
+	render_pass_mark_updated(pass, &options->box, &clip_region);
+
+	TRACY_BOTH_ZONES_START(renderer);
+	push_fx_debug(renderer);
+	setup_blending(WLR_RENDER_BLEND_MODE_PREMULTIPLIED);
+
+	struct border_shader shader = renderer->shaders.border;
+	glUseProgram(shader.program);
+	set_proj_matrix(shader.proj, pass->projection_matrix, &options->box);
+	glUniform4f(shader.color,
+		outer_color.r, outer_color.g, outer_color.b, outer_color.a);
+	glUniform4f(shader.inner_color,
+		inner_color.r, inner_color.g, inner_color.b, inner_color.a);
+	glUniform2f(shader.clip_size,
+		options->clipped_region.area.width,
+		options->clipped_region.area.height);
+	glUniform2f(shader.clip_position,
+		options->clipped_region.area.x,
+		options->clipped_region.area.y);
+	uniform_corner_radii_set(&shader.clip_radius,
+		&options->clipped_region.corners);
+	glUniform1f(shader.inner_width, options->inner_width);
+	glUniform1f(shader.outer_width, options->outer_width);
+
+	render(&options->box, &clip_region, shader.pos_attrib);
+	pixman_region32_fini(&clip_region);
 	pop_fx_debug(renderer);
 	TRACY_BOTH_ZONES_END;
 }

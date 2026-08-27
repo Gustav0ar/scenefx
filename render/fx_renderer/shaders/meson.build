@@ -8,6 +8,7 @@ shaders = [
 	'quad.frag',
 	'quad_grad.frag',
 	'quad_round.frag',
+	'border.frag',
 	'quad_grad_round.frag',
 	'tex.frag',
 	'output.frag',

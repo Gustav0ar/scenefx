@@ -77,6 +77,16 @@ struct fx_render_rounded_rect_options {
 	struct clipped_fregion clipped_region;
 };
 
+struct fx_render_border_options {
+	struct wlr_box box;
+	const pixman_region32_t *clip;
+	struct clipped_fregion clipped_region;
+	float inner_width;
+	float outer_width;
+	struct wlr_render_color inner_color;
+	struct wlr_render_color outer_color;
+};
+
 struct fx_render_rounded_rect_grad_options {
 	struct wlr_render_rect_options base;
 	struct fx_gradient gradient;
@@ -137,6 +147,12 @@ void fx_render_pass_add_rect_grad(struct fx_gles_render_pass *render_pass,
  */
 void fx_render_pass_add_rounded_rect(struct fx_gles_render_pass *render_pass,
 	const struct fx_render_rounded_rect_options *options);
+
+/**
+ * Render a two-color rounded border.
+ */
+void fx_render_pass_add_border(struct fx_gles_render_pass *render_pass,
+	const struct fx_render_border_options *options);
 
 /**
  * Render a rounded rectangle with a gradient.
