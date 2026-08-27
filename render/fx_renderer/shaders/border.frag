@@ -28,7 +28,20 @@ float antialias_width(float distance) {
 	return max(length(gradient), 1.0) * 0.5;
 }
 
+float square_content_distance() {
+	vec2 centered = gl_FragCoord.xy - clip_position - clip_size * 0.5;
+	vec2 edge_distance = abs(centered) - clip_size * 0.5;
+	return max(edge_distance.x, edge_distance.y);
+}
+
 float content_distance() {
+	bool square = clip_radius_top_left <= 0.0
+		&& clip_radius_top_right <= 0.0
+		&& clip_radius_bottom_left <= 0.0
+		&& clip_radius_bottom_right <= 0.0;
+	if (square) {
+		return square_content_distance();
+	}
 	return rounded_rect_distance(
 		clip_size,
 		clip_position,
