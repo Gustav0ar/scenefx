@@ -188,7 +188,7 @@ lib_scenefx = library(
 
 
 scenefx = declare_dependency(
-	link_with: lib_scenefx,
+	link_whole: lib_scenefx,
 	dependencies: scenefx_deps,
 	include_directories: scenefx_inc,
 )
