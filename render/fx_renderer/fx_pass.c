@@ -1044,8 +1044,12 @@ void fx_render_pass_add_border(struct fx_gles_render_pass *pass,
 	glUniform2f(shader.clip_position,
 		options->clipped_region.area.x,
 		options->clipped_region.area.y);
-	uniform_corner_radii_set(&shader.clip_radius,
+	uniform_corner_radii_set(&shader.inner_radius,
 		&options->clipped_region.corners);
+	uniform_corner_radii_set(&shader.seam_radius,
+		&options->seam_corners);
+	uniform_corner_radii_set(&shader.outer_radius,
+		&options->outer_corners);
 	glUniform1f(shader.inner_width, options->inner_width);
 	glUniform1f(shader.outer_width, options->outer_width);
 

@@ -94,7 +94,9 @@ struct border_shader {
 	GLint pos_attrib;
 	GLint clip_size;
 	GLint clip_position;
-	struct shader_corner_radii clip_radius;
+	struct shader_corner_radii inner_radius;
+	struct shader_corner_radii seam_radius;
+	struct shader_corner_radii outer_radius;
 	GLint inner_width;
 	GLint outer_width;
 	GLint inner_color;

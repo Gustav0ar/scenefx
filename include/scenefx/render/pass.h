@@ -81,6 +81,8 @@ struct fx_render_border_options {
 	struct wlr_box box;
 	const pixman_region32_t *clip;
 	struct clipped_fregion clipped_region;
+	struct fx_corner_fradii seam_corners;
+	struct fx_corner_fradii outer_corners;
 	float inner_width;
 	float outer_width;
 	struct wlr_render_color inner_color;

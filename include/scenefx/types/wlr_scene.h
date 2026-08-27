@@ -177,6 +177,8 @@ struct wlr_scene_border {
 	float inner_color[4];
 	float outer_color[4];
 	struct clipped_region clipped_region;
+	struct fx_corner_radii seam_corners;
+	struct fx_corner_radii outer_corners;
 };
 
 /** A scene-graph node displaying a shadow */
@@ -632,9 +634,15 @@ void wlr_scene_rect_set_color(struct wlr_scene_rect *rect, const float color[sta
 struct wlr_scene_border *wlr_scene_border_create(struct wlr_scene_tree *parent,
 		const float inner_color[static 4], const float outer_color[static 4]);
 
+/**
+ * The clipped region is the transparent content box and its inner corner radii.
+ * Seam and outer radii describe the other two nested contours explicitly.
+ */
 void wlr_scene_border_set_geometry(struct wlr_scene_border *border,
 		int width, int height, int inner_width, int outer_width,
-		struct clipped_region clipped_region);
+		struct clipped_region clipped_region,
+		struct fx_corner_radii seam_corners,
+		struct fx_corner_radii outer_corners);
 
 void wlr_scene_border_set_colors(struct wlr_scene_border *border,
 		const float inner_color[static 4], const float outer_color[static 4]);

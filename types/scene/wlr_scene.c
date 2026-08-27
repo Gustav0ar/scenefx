@@ -1074,7 +1074,9 @@ struct wlr_scene_border *wlr_scene_border_create(struct wlr_scene_tree *parent,
 
 void wlr_scene_border_set_geometry(struct wlr_scene_border *border,
 		int width, int height, int inner_width, int outer_width,
-		struct clipped_region clipped_region) {
+		struct clipped_region clipped_region,
+		struct fx_corner_radii seam_corners,
+		struct fx_corner_radii outer_corners) {
 	assert(width >= 0 && height >= 0);
 	assert(inner_width >= 0 && outer_width >= 0);
 	if (border->width == width && border->height == height &&
@@ -1082,6 +1084,8 @@ void wlr_scene_border_set_geometry(struct wlr_scene_border *border,
 			border->outer_width == outer_width &&
 			fx_corner_radii_eq(border->clipped_region.corners,
 				clipped_region.corners) &&
+			fx_corner_radii_eq(border->seam_corners, seam_corners) &&
+			fx_corner_radii_eq(border->outer_corners, outer_corners) &&
 			wlr_box_equal(&border->clipped_region.area,
 				&clipped_region.area)) {
 		return;
@@ -1092,6 +1096,8 @@ void wlr_scene_border_set_geometry(struct wlr_scene_border *border,
 	border->inner_width = inner_width;
 	border->outer_width = outer_width;
 	border->clipped_region = clipped_region;
+	border->seam_corners = seam_corners;
+	border->outer_corners = outer_corners;
 	scene_node_update(&border->node, NULL);
 }
 
@@ -2312,11 +2318,17 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 			scene_border->clipped_region.area;
 		struct fx_corner_radii border_clipped_corners =
 			scene_border->clipped_region.corners;
+		struct fx_corner_radii border_seam_corners =
+			scene_border->seam_corners;
+		struct fx_corner_radii border_outer_corners =
+			scene_border->outer_corners;
 
 		border_clipped_region_box.x += x;
 		border_clipped_region_box.y += y;
 		transform_output_box(&border_clipped_region_box, data);
 		fx_corner_radii_transform(node_transform, &border_clipped_corners);
+		fx_corner_radii_transform(node_transform, &border_seam_corners);
+		fx_corner_radii_transform(node_transform, &border_outer_corners);
 
 		fx_render_pass_add_border(fx_pass,
 			&(struct fx_render_border_options){
@@ -2327,6 +2339,10 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 					.corners = fx_corner_radii_scale(
 						border_clipped_corners, data->scale),
 				},
+				.seam_corners = fx_corner_radii_scale(
+					border_seam_corners, data->scale),
+				.outer_corners = fx_corner_radii_scale(
+					border_outer_corners, data->scale),
 				.inner_width = scene_border->inner_width * data->scale,
 				.outer_width = scene_border->outer_width * data->scale,
 				.inner_color = {
