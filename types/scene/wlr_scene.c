@@ -54,6 +54,12 @@ struct wlr_scene_rect *wlr_scene_rect_from_node(struct wlr_scene_node *node) {
 	return rect;
 }
 
+struct wlr_scene_border *wlr_scene_border_from_node(struct wlr_scene_node *node) {
+	assert(node->type == WLR_SCENE_NODE_BORDER);
+	struct wlr_scene_border *border = wl_container_of(node, border, node);
+	return border;
+}
+
 struct wlr_scene_optimized_blur *wlr_scene_optimized_blur_from_node(
 		struct wlr_scene_node *node) {
 	assert(node->type == WLR_SCENE_NODE_OPTIMIZED_BLUR);
@@ -326,6 +332,7 @@ static bool _scene_nodes_in_box(struct wlr_scene_node *node, struct wlr_box *box
 		}
 		break;
 	case WLR_SCENE_NODE_RECT:
+	case WLR_SCENE_NODE_BORDER:
 	case WLR_SCENE_NODE_BUFFER:
 	case WLR_SCENE_NODE_SHADOW:
 	case WLR_SCENE_NODE_OPTIMIZED_BLUR:
@@ -440,6 +447,9 @@ static void scene_node_opaque_region(struct wlr_scene_node *node, int x, int y,
 			pixman_region32_subtract(opaque, opaque, &clipped_region);
 			pixman_region32_fini(&clipped_region);
 		}
+		return;
+	} else if (node->type == WLR_SCENE_NODE_BORDER) {
+		// Border edges are antialiased and the center is transparent.
 		return;
 	} else if (node->type == WLR_SCENE_NODE_BUFFER) {
 		struct wlr_scene_buffer *scene_buffer = wlr_scene_buffer_from_node(node);
@@ -1044,6 +1054,59 @@ void wlr_scene_rect_set_color(struct wlr_scene_rect *rect, const float color[sta
 
 	memcpy(rect->color, color, sizeof(rect->color));
 	scene_node_update(&rect->node, NULL);
+}
+
+struct wlr_scene_border *wlr_scene_border_create(struct wlr_scene_tree *parent,
+		const float inner_color[static 4], const float outer_color[static 4]) {
+	assert(parent);
+
+	struct wlr_scene_border *border = calloc(1, sizeof(*border));
+	if (border == NULL) {
+		return NULL;
+	}
+	scene_node_init(&border->node, WLR_SCENE_NODE_BORDER, parent);
+	memcpy(border->inner_color, inner_color, sizeof(border->inner_color));
+	memcpy(border->outer_color, outer_color, sizeof(border->outer_color));
+	border->clipped_region = clipped_region_get_default();
+	scene_node_update(&border->node, NULL);
+	return border;
+}
+
+void wlr_scene_border_set_geometry(struct wlr_scene_border *border,
+		int width, int height, int inner_width, int outer_width,
+		struct clipped_region clipped_region) {
+	assert(width >= 0 && height >= 0);
+	assert(inner_width >= 0 && outer_width >= 0);
+	if (border->width == width && border->height == height &&
+			border->inner_width == inner_width &&
+			border->outer_width == outer_width &&
+			fx_corner_radii_eq(border->clipped_region.corners,
+				clipped_region.corners) &&
+			wlr_box_equal(&border->clipped_region.area,
+				&clipped_region.area)) {
+		return;
+	}
+
+	border->width = width;
+	border->height = height;
+	border->inner_width = inner_width;
+	border->outer_width = outer_width;
+	border->clipped_region = clipped_region;
+	scene_node_update(&border->node, NULL);
+}
+
+void wlr_scene_border_set_colors(struct wlr_scene_border *border,
+		const float inner_color[static 4], const float outer_color[static 4]) {
+	if (memcmp(border->inner_color, inner_color,
+				sizeof(border->inner_color)) == 0 &&
+			memcmp(border->outer_color, outer_color,
+				sizeof(border->outer_color)) == 0) {
+		return;
+	}
+
+	memcpy(border->inner_color, inner_color, sizeof(border->inner_color));
+	memcpy(border->outer_color, outer_color, sizeof(border->outer_color));
+	scene_node_update(&border->node, NULL);
 }
 
 static void scene_buffer_handle_buffer_release(struct wl_listener *listener,
@@ -1856,6 +1919,11 @@ void scene_node_get_size(struct wlr_scene_node *node, int *width, int *height) {
 		*width = scene_rect->width;
 		*height = scene_rect->height;
 		break;
+	case WLR_SCENE_NODE_BORDER:;
+		struct wlr_scene_border *scene_border = wlr_scene_border_from_node(node);
+		*width = scene_border->width;
+		*height = scene_border->height;
+		break;
 	case WLR_SCENE_NODE_BUFFER:;
 		struct wlr_scene_buffer *scene_buffer = wlr_scene_buffer_from_node(node);
 		if (scene_buffer->dst_width > 0 && scene_buffer->dst_height > 0) {
@@ -2070,7 +2138,8 @@ static bool scene_node_at_iterator(struct wlr_scene_node *node,
 			// Inside clipped region
 			return false;
 		}
-	} else if (node->type == WLR_SCENE_NODE_SHADOW
+	} else if (node->type == WLR_SCENE_NODE_BORDER ||
+			node->type == WLR_SCENE_NODE_SHADOW
 			|| node->type == WLR_SCENE_NODE_OPTIMIZED_BLUR
 			|| node->type == WLR_SCENE_NODE_BLUR) {
 		// Disable interaction
@@ -2235,6 +2304,44 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 		} else {
 			fx_render_pass_add_rect(fx_pass, &rect_options);
 		}
+		break;
+	case WLR_SCENE_NODE_BORDER:;
+		struct wlr_scene_border *scene_border =
+			wlr_scene_border_from_node(node);
+		struct wlr_box border_clipped_region_box =
+			scene_border->clipped_region.area;
+		struct fx_corner_radii border_clipped_corners =
+			scene_border->clipped_region.corners;
+
+		border_clipped_region_box.x += x;
+		border_clipped_region_box.y += y;
+		transform_output_box(&border_clipped_region_box, data);
+		fx_corner_radii_transform(node_transform, &border_clipped_corners);
+
+		fx_render_pass_add_border(fx_pass,
+			&(struct fx_render_border_options){
+				.box = dst_box,
+				.clip = &render_region,
+				.clipped_region = {
+					.area = border_clipped_region_box,
+					.corners = fx_corner_radii_scale(
+						border_clipped_corners, data->scale),
+				},
+				.inner_width = scene_border->inner_width * data->scale,
+				.outer_width = scene_border->outer_width * data->scale,
+				.inner_color = {
+					.r = scene_border->inner_color[0],
+					.g = scene_border->inner_color[1],
+					.b = scene_border->inner_color[2],
+					.a = scene_border->inner_color[3],
+				},
+				.outer_color = {
+					.r = scene_border->outer_color[0],
+					.g = scene_border->outer_color[1],
+					.b = scene_border->outer_color[2],
+					.a = scene_border->outer_color[3],
+				},
+			});
 		break;
 	case WLR_SCENE_NODE_BUFFER:;
 		struct wlr_scene_buffer *scene_buffer = wlr_scene_buffer_from_node(node);
@@ -2805,6 +2912,10 @@ static bool scene_node_invisible(struct wlr_scene_node *node) {
 		struct wlr_scene_rect *rect = wlr_scene_rect_from_node(node);
 		// TODO: Check if clipped region covers whole rect?
 		return rect->color[3] == 0.f;
+	} else if (node->type == WLR_SCENE_NODE_BORDER) {
+		struct wlr_scene_border *border = wlr_scene_border_from_node(node);
+		return (border->inner_width <= 0 || border->inner_color[3] == 0.f) &&
+			(border->outer_width <= 0 || border->outer_color[3] == 0.f);
 	} else if (node->type == WLR_SCENE_NODE_BUFFER) {
 		struct wlr_scene_buffer *buffer = wlr_scene_buffer_from_node(node);
 

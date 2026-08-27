@@ -92,6 +92,7 @@ static inline void free_shaders(struct fx_renderer *renderer) {
 	glDeleteProgram(renderer->shaders.quad.program);
 	glDeleteProgram(renderer->shaders.quad_clip.program);
 	glDeleteProgram(renderer->shaders.quad_round.program);
+	glDeleteProgram(renderer->shaders.border.program);
 	glDeleteProgram(renderer->shaders.quad_grad.program);
 	glDeleteProgram(renderer->shaders.quad_grad_round.program);
 	glDeleteProgram(renderer->shaders.tex_rgba.program);
@@ -394,6 +395,11 @@ static bool link_shaders(struct fx_renderer *renderer) {
 
 	if (!link_quad_round_program(&renderer->shaders.quad_round)) {
 		wlr_log(WLR_ERROR, "Could not link quad round shader");
+		goto error;
+	}
+
+	if (!link_border_program(&renderer->shaders.border)) {
+		wlr_log(WLR_ERROR, "Could not link border shader");
 		goto error;
 	}
 

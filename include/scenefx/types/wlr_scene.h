@@ -59,6 +59,7 @@ typedef void (*wlr_scene_buffer_iterator_func_t)(
 enum wlr_scene_node_type {
 	WLR_SCENE_NODE_TREE,
 	WLR_SCENE_NODE_RECT,
+	WLR_SCENE_NODE_BORDER,
 	WLR_SCENE_NODE_BUFFER,
 	WLR_SCENE_NODE_SHADOW,
 	WLR_SCENE_NODE_OPTIMIZED_BLUR,
@@ -165,6 +166,16 @@ struct wlr_scene_rect {
 
 	struct fx_corner_radii corners;
 	bool accepts_input;
+	struct clipped_region clipped_region;
+};
+
+/** A scene-graph node displaying a two-color rounded border in one pass */
+struct wlr_scene_border {
+	struct wlr_scene_node node;
+	int width, height;
+	int inner_width, outer_width;
+	float inner_color[4];
+	float outer_color[4];
 	struct clipped_region clipped_region;
 };
 
@@ -545,6 +556,12 @@ struct wlr_scene_tree *wlr_scene_tree_from_node(struct wlr_scene_node *node);
 struct wlr_scene_rect *wlr_scene_rect_from_node(struct wlr_scene_node *node);
 
 /**
+ * If this node represents a wlr_scene_border, that border will be returned. It
+ * is not legal to feed a node that does not represent a wlr_scene_border.
+ */
+struct wlr_scene_border *wlr_scene_border_from_node(struct wlr_scene_node *node);
+
+/**
  * If this node represents a wlr_scene_shadow, that shadow will be returned. It
  * is not legal to feed a node that does not represent a wlr_scene_shadow.
  */
@@ -605,6 +622,22 @@ void wlr_scene_rect_set_clipped_region(struct wlr_scene_rect *rect,
  * The color argument must be a premultiplied color value.
  */
 void wlr_scene_rect_set_color(struct wlr_scene_rect *rect, const float color[static 4]);
+
+/**
+ * Add a node displaying a two-color rounded border.
+ *
+ * Colors must be premultiplied. Widths are logical pixels. Geometry is set
+ * separately so callers can update every shape field atomically.
+ */
+struct wlr_scene_border *wlr_scene_border_create(struct wlr_scene_tree *parent,
+		const float inner_color[static 4], const float outer_color[static 4]);
+
+void wlr_scene_border_set_geometry(struct wlr_scene_border *border,
+		int width, int height, int inner_width, int outer_width,
+		struct clipped_region clipped_region);
+
+void wlr_scene_border_set_colors(struct wlr_scene_border *border,
+		const float inner_color[static 4], const float outer_color[static 4]);
 
 /**
  * Add a node displaying a shadow to the scene-graph.

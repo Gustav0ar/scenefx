@@ -14,6 +14,7 @@
 #include "quad_frag_src.h"
 #include "quad_grad_frag_src.h"
 #include "quad_round_frag_src.h"
+#include "border_frag_src.h"
 #include "quad_grad_round_frag_src.h"
 #include "tex_frag_src.h"
 #include "output_frag_src.h"
@@ -199,6 +200,33 @@ bool link_quad_round_program(struct quad_round_shader *shader) {
 	shader->clip_radius.top_right = glGetUniformLocation(prog, "clip_radius_top_right");
 	shader->clip_radius.bottom_left = glGetUniformLocation(prog, "clip_radius_bottom_left");
 	shader->clip_radius.bottom_right = glGetUniformLocation(prog, "clip_radius_bottom_right");
+
+	return true;
+}
+
+bool link_border_program(struct border_shader *shader) {
+	GLchar border_src[sizeof(border_frag_src) + sizeof(corner_alpha_frag_src) + 1];
+	snprintf(border_src, sizeof(border_src), "%s\n%s",
+		border_frag_src, corner_alpha_frag_src);
+
+	GLuint prog;
+	shader->program = prog = link_program(border_src);
+	if (!shader->program) {
+		return false;
+	}
+
+	shader->proj = glGetUniformLocation(prog, "proj");
+	shader->color = glGetUniformLocation(prog, "color");
+	shader->pos_attrib = glGetAttribLocation(prog, "pos");
+	shader->clip_size = glGetUniformLocation(prog, "clip_size");
+	shader->clip_position = glGetUniformLocation(prog, "clip_position");
+	shader->clip_radius.top_left = glGetUniformLocation(prog, "clip_radius_top_left");
+	shader->clip_radius.top_right = glGetUniformLocation(prog, "clip_radius_top_right");
+	shader->clip_radius.bottom_left = glGetUniformLocation(prog, "clip_radius_bottom_left");
+	shader->clip_radius.bottom_right = glGetUniformLocation(prog, "clip_radius_bottom_right");
+	shader->inner_width = glGetUniformLocation(prog, "inner_width");
+	shader->outer_width = glGetUniformLocation(prog, "outer_width");
+	shader->inner_color = glGetUniformLocation(prog, "inner_color");
 
 	return true;
 }

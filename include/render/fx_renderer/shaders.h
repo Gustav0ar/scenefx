@@ -79,9 +79,28 @@ struct quad_round_shader {
 	GLint clip_size;
 	GLint clip_position;
 	struct shader_corner_radii clip_radius;
+
+	GLint border_width;
+	GLint border_inner_width;
+	GLint border_inner_color;
 };
 
 bool link_quad_round_program(struct quad_round_shader *shader);
+
+struct border_shader {
+	GLuint program;
+	GLint proj;
+	GLint color;
+	GLint pos_attrib;
+	GLint clip_size;
+	GLint clip_position;
+	struct shader_corner_radii clip_radius;
+	GLint inner_width;
+	GLint outer_width;
+	GLint inner_color;
+};
+
+bool link_border_program(struct border_shader *shader);
 
 struct quad_grad_round_shader {
 	GLuint program;
