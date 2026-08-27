@@ -340,6 +340,8 @@ struct wlr_scene_output {
 		uint64_t in_point;
 		struct wlr_drm_syncobj_timeline *out_timeline;
 		uint64_t out_point;
+
+		bool direct_scanout_enabled;
 	} WLR_PRIVATE;
 };
 
@@ -892,6 +894,14 @@ void wlr_scene_output_destroy(struct wlr_scene_output *scene_output);
  */
 void wlr_scene_output_set_position(struct wlr_scene_output *scene_output,
 	int lx, int ly);
+
+/**
+ * Enable or disable direct scanout attempts for this scene output.
+ *
+ * Changing this fully damages and schedules the output.
+ */
+void wlr_scene_output_set_direct_scanout_enabled(
+	struct wlr_scene_output *scene_output, bool enabled);
 
 /**
  * Set the SDR white level used for PQ input and output normalization.

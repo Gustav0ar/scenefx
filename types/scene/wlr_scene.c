@@ -2654,6 +2654,7 @@ struct wlr_scene_output *wlr_scene_output_create(struct wlr_scene *scene,
 
 	scene_output->output = output;
 	scene_output->scene = scene;
+	scene_output->direct_scanout_enabled = true;
 	wlr_addon_init(&scene_output->addon, &output->addons, scene, &output_addon_impl);
 
 	wlr_damage_ring_init(&scene_output->damage_ring);
@@ -2773,6 +2774,16 @@ void wlr_scene_output_set_position(struct wlr_scene_output *scene_output,
 	scene_output->y = ly;
 
 	scene_output_update_geometry(scene_output, false);
+}
+
+void wlr_scene_output_set_direct_scanout_enabled(
+		struct wlr_scene_output *scene_output, bool enabled) {
+	if (scene_output->direct_scanout_enabled == enabled) {
+		return;
+	}
+
+	scene_output->direct_scanout_enabled = enabled;
+	scene_output_damage_whole(scene_output);
 }
 
 void wlr_scene_output_set_sdr_white_level(
@@ -2976,7 +2987,8 @@ static enum scene_direct_scanout_result scene_entry_try_direct_scanout(
 	struct wlr_scene_output *scene_output = data->output;
 	struct wlr_scene_node *node = entry->node;
 
-	if (!scene_output->scene->direct_scanout) {
+	if (!scene_output->scene->direct_scanout ||
+			!scene_output->direct_scanout_enabled) {
 		return SCANOUT_INELIGIBLE;
 	}
 
