@@ -303,6 +303,7 @@ bool link_tex_program(struct tex_shader *shader, enum fx_tex_shader_source sourc
 	shader->tex_proj = glGetUniformLocation(prog, "tex_proj");
 
 	shader->discard_transparent = glGetUniformLocation(prog, "discard_transparent");
+	shader->sample_bounds = glGetUniformLocation(prog, "sample_bounds");
 
 	if (!effects) {
 		return true;

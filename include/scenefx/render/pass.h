@@ -59,6 +59,11 @@ struct fx_render_texture_options {
 	struct fx_corner_fradii corners;
 	float discard_transparent; // discard pixels with alpha < this; 0.0 discards nothing
 	struct clipped_fregion clipped_region;
+	// Texels the draw may sample, in buffer coordinates. A source box snapped to
+	// whole texels can reach past the region a cropped surface actually owns;
+	// this keeps sampling inside it by duplicating its edge texel. Empty samples
+	// the whole texture.
+	struct wlr_fbox sample_box;
 };
 
 struct fx_render_rect_options {

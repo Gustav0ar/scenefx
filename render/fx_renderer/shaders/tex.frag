@@ -57,12 +57,20 @@ uniform float clip_radius_bottom_right;
 #endif
 
 uniform float discard_transparent;
+// Normalized texel range the fragment may sample: xy is the first sampled texel
+// center, zw the last. A cropped surface whose crop edge falls between texels
+// snaps its source box to whole texels for sharpness, which can leave the box
+// reaching one texel past the crop. Clamping here duplicates the last texel
+// inside the crop instead of pulling in whatever the client left outside it,
+// which for a client-side-decorated window is its transparent shadow margin.
+uniform vec4 sample_bounds;
 
 vec4 sample_texture() {
+	vec2 uv = clamp(v_texcoord, sample_bounds.xy, sample_bounds.zw);
 #if SOURCE == SOURCE_TEXTURE_RGBA || SOURCE == SOURCE_TEXTURE_EXTERNAL
-	return texture2D(tex, v_texcoord);
+	return texture2D(tex, uv);
 #elif SOURCE == SOURCE_TEXTURE_RGBX
-	return vec4(texture2D(tex, v_texcoord).rgb, 1.0);
+	return vec4(texture2D(tex, uv).rgb, 1.0);
 #endif
 }
 
