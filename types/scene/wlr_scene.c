@@ -2435,6 +2435,32 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 			snapped_src_box.height = src_dst_height;
 		}
 
+		// Adopting a one-texel-larger destination extent deliberately reaches
+		// past the source region so that sampling stays exactly texel-centered
+		// and the final row or column duplicates the edge texel. Whether that
+		// duplication needs the shader's sampling clamp depends on where the
+		// excursion lands: past the texture boundary, GL_CLAMP_TO_EDGE already
+		// produces the duplicated texel, but past an interior crop edge the
+		// neighboring texel belongs to the client's transparent shadow margin
+		// and only the clamp keeps it out. Restrict the clamp variant to that
+		// interior case; applied to every draw it has caused full-session
+		// flicker and tearing on NVIDIA.
+		bool crosses_crop_edge = false;
+		if (!wlr_fbox_empty(&sample_box)) {
+			crosses_crop_edge =
+				(snapped_src_box.x < sample_box.x && sample_box.x > 0) ||
+				(snapped_src_box.y < sample_box.y && sample_box.y > 0) ||
+				(snapped_src_box.x + snapped_src_box.width >
+					sample_box.x + sample_box.width &&
+					sample_box.x + sample_box.width < texture->width) ||
+				(snapped_src_box.y + snapped_src_box.height >
+					sample_box.y + sample_box.height &&
+					sample_box.y + sample_box.height < texture->height);
+		}
+		if (!crosses_crop_edge) {
+			sample_box = (struct wlr_fbox){0};
+		}
+
 		struct fx_render_texture_options tex_options = {
 			.base = (struct wlr_render_texture_options){
 				.texture = texture,

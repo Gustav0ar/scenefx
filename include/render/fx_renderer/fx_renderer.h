@@ -213,6 +213,12 @@ struct fx_renderer {
 		struct tex_shader tex_effects_rgba;
 		struct tex_shader tex_effects_rgbx;
 		struct tex_shader tex_effects_ext;
+		struct tex_shader tex_clamp_rgba;
+		struct tex_shader tex_clamp_rgbx;
+		struct tex_shader tex_clamp_ext;
+		struct tex_shader tex_clamp_effects_rgba;
+		struct tex_shader tex_clamp_effects_rgbx;
+		struct tex_shader tex_clamp_effects_ext;
 		struct output_shader output;
 
 		struct box_shadow_shader box_shadow;

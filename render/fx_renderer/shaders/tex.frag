@@ -1,11 +1,12 @@
 #define SOURCE %d
 #define EFFECTS %d
+#define SAMPLE_CLAMP %d
 
 #define SOURCE_TEXTURE_RGBA 1
 #define SOURCE_TEXTURE_RGBX 2
 #define SOURCE_TEXTURE_EXTERNAL 3
 
-#if !defined(SOURCE) || !defined(EFFECTS)
+#if !defined(SOURCE) || !defined(EFFECTS) || !defined(SAMPLE_CLAMP)
 #error "Missing shader preamble"
 #endif
 
@@ -57,20 +58,27 @@ uniform float clip_radius_bottom_right;
 #endif
 
 uniform float discard_transparent;
+
+#if SAMPLE_CLAMP
 // Normalized texel range the fragment may sample: xy is the first sampled texel
 // center, zw the last. A cropped surface whose crop edge falls between texels
 // snaps its source box to whole texels for sharpness, which can leave the box
 // reaching one texel past the crop. Clamping here duplicates the last texel
 // inside the crop instead of pulling in whatever the client left outside it,
 // which for a client-side-decorated window is its transparent shadow margin.
+// The clamp is compiled only into the variants selected for such crops, so
+// every other draw keeps the exact fetch drivers already handle well.
 uniform vec4 sample_bounds;
+#define SAMPLE_UV clamp(v_texcoord, sample_bounds.xy, sample_bounds.zw)
+#else
+#define SAMPLE_UV v_texcoord
+#endif
 
 vec4 sample_texture() {
-	vec2 uv = clamp(v_texcoord, sample_bounds.xy, sample_bounds.zw);
 #if SOURCE == SOURCE_TEXTURE_RGBA || SOURCE == SOURCE_TEXTURE_EXTERNAL
-	return texture2D(tex, uv);
+	return texture2D(tex, SAMPLE_UV);
 #elif SOURCE == SOURCE_TEXTURE_RGBX
-	return vec4(texture2D(tex, uv).rgb, 1.0);
+	return vec4(texture2D(tex, SAMPLE_UV).rgb, 1.0);
 #endif
 }
 

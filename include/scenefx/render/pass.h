@@ -61,8 +61,9 @@ struct fx_render_texture_options {
 	struct clipped_fregion clipped_region;
 	// Texels the draw may sample, in buffer coordinates. A source box snapped to
 	// whole texels can reach past the region a cropped surface actually owns;
-	// this keeps sampling inside it by duplicating its edge texel. Empty samples
-	// the whole texture.
+	// this keeps sampling inside it by duplicating its edge texel. Empty draws
+	// with the regular shader and no sampling clamp at all; only pass a box when
+	// the source box actually reaches texels outside it.
 	struct wlr_fbox sample_box;
 };
 

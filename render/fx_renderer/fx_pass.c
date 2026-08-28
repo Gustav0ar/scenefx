@@ -622,25 +622,41 @@ void fx_render_pass_add_texture(struct fx_gles_render_pass *pass,
 
 	bool use_effects = !fx_corner_fradii_is_empty(&fx_options->corners)
 		|| clipped_fregion_is_valid(&fx_options->clipped_region);
+	// A non-empty sample box selects the clamp variant. Everything else runs
+	// the same fetch as before the clamp existed, so a driver only ever sees
+	// the extra uniform on fractionally cropped surfaces.
+	bool use_clamp = !wlr_fbox_empty(&fx_options->sample_box);
 	switch (texture->target) {
 	case GL_TEXTURE_2D:
 		if (texture->has_alpha) {
-			shader = use_effects
-				? &renderer->shaders.tex_effects_rgba
-				: &renderer->shaders.tex_rgba;
+			shader = use_clamp
+				? (use_effects
+					? &renderer->shaders.tex_clamp_effects_rgba
+					: &renderer->shaders.tex_clamp_rgba)
+				: (use_effects
+					? &renderer->shaders.tex_effects_rgba
+					: &renderer->shaders.tex_rgba);
 		} else {
-			shader = use_effects
-				? &renderer->shaders.tex_effects_rgbx
-				: &renderer->shaders.tex_rgbx;
+			shader = use_clamp
+				? (use_effects
+					? &renderer->shaders.tex_clamp_effects_rgbx
+					: &renderer->shaders.tex_clamp_rgbx)
+				: (use_effects
+					? &renderer->shaders.tex_effects_rgbx
+					: &renderer->shaders.tex_rgbx);
 		}
 		break;
 	case GL_TEXTURE_EXTERNAL_OES:
 		// EGL_EXT_image_dma_buf_import_modifiers requires
 		// GL_OES_EGL_image_external
 		assert(renderer->exts.OES_egl_image_external);
-		shader = use_effects
-			? &renderer->shaders.tex_effects_ext
-			: &renderer->shaders.tex_ext;
+		shader = use_clamp
+			? (use_effects
+				? &renderer->shaders.tex_clamp_effects_ext
+				: &renderer->shaders.tex_clamp_ext)
+			: (use_effects
+				? &renderer->shaders.tex_effects_ext
+				: &renderer->shaders.tex_ext);
 		break;
 	default:
 		abort();
@@ -664,13 +680,7 @@ void fx_render_pass_add_texture(struct fx_gles_render_pass *pass,
 
 	// Texel centers of the first and last sampleable texel, so a clamped
 	// coordinate lands on a texel rather than between two.
-	struct wlr_fbox sample_box = fx_options->sample_box;
-	if (wlr_fbox_empty(&sample_box)) {
-		sample_box = (struct wlr_fbox){
-			.width = options->texture->width,
-			.height = options->texture->height,
-		};
-	}
+	const struct wlr_fbox sample_box = fx_options->sample_box;
 	const float sample_bounds[4] = {
 		(sample_box.x + 0.5) / options->texture->width,
 		(sample_box.y + 0.5) / options->texture->height,
@@ -787,8 +797,10 @@ void fx_render_pass_add_texture(struct fx_gles_render_pass *pass,
 	glUniform1i(shader->target_tf, color_passthrough ? 0 : target_tf);
 
 	glUniform1f(shader->discard_transparent, fx_options->discard_transparent);
-	glUniform4f(shader->sample_bounds, sample_bounds[0], sample_bounds[1],
-		sample_bounds[2], sample_bounds[3]);
+	if (use_clamp) {
+		glUniform4f(shader->sample_bounds, sample_bounds[0], sample_bounds[1],
+			sample_bounds[2], sample_bounds[3]);
+	}
 
 	if (use_effects) {
 		struct fx_corner_fradii corners = fx_options->corners;
