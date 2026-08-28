@@ -57,10 +57,12 @@ typedef void (*wlr_scene_buffer_iterator_func_t)(
 	struct wlr_scene_buffer *buffer, int sx, int sy, void *user_data);
 
 enum wlr_scene_node_type {
-	WLR_SCENE_NODE_TREE,
-	WLR_SCENE_NODE_RECT,
+	// Keep wlroots node values stable because its separately compiled scene
+	// helpers inspect nodes created by SceneFX.
+	WLR_SCENE_NODE_TREE = 0,
+	WLR_SCENE_NODE_RECT = 1,
+	WLR_SCENE_NODE_BUFFER = 2,
 	WLR_SCENE_NODE_BORDER,
-	WLR_SCENE_NODE_BUFFER,
 	WLR_SCENE_NODE_SHADOW,
 	WLR_SCENE_NODE_OPTIMIZED_BLUR,
 	WLR_SCENE_NODE_BLUR,
