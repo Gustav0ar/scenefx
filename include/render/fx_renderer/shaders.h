@@ -141,6 +141,7 @@ struct tex_shader {
 	GLint pos_attrib;
 
 	GLint discard_transparent;
+	GLint sample_bounds;
 
 	// Only used for the effects shader
 	struct {
