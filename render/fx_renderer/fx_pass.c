@@ -662,22 +662,6 @@ void fx_render_pass_add_texture(struct fx_gles_render_pass *pass,
 	src_fbox.width /= options->texture->width;
 	src_fbox.height /= options->texture->height;
 
-	// Texel centers of the first and last sampleable texel, so a clamped
-	// coordinate lands on a texel rather than between two.
-	struct wlr_fbox sample_box = fx_options->sample_box;
-	if (wlr_fbox_empty(&sample_box)) {
-		sample_box = (struct wlr_fbox){
-			.width = options->texture->width,
-			.height = options->texture->height,
-		};
-	}
-	const float sample_bounds[4] = {
-		(sample_box.x + 0.5) / options->texture->width,
-		(sample_box.y + 0.5) / options->texture->height,
-		(sample_box.x + sample_box.width - 0.5) / options->texture->width,
-		(sample_box.y + sample_box.height - 0.5) / options->texture->height,
-	};
-
 	TRACY_BOTH_ZONES_START(renderer);
 	TRACY_ZONE_TEXT_f("dst_box (WxH, X, Y): %dx%d, %d, %d",
 			dst_box.width, dst_box.height, dst_box.x, dst_box.y);
@@ -787,8 +771,6 @@ void fx_render_pass_add_texture(struct fx_gles_render_pass *pass,
 	glUniform1i(shader->target_tf, color_passthrough ? 0 : target_tf);
 
 	glUniform1f(shader->discard_transparent, fx_options->discard_transparent);
-	glUniform4f(shader->sample_bounds, sample_bounds[0], sample_bounds[1],
-		sample_bounds[2], sample_bounds[3]);
 
 	if (use_effects) {
 		struct fx_corner_fradii corners = fx_options->corners;

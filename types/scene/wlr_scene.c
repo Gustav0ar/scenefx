@@ -2221,6 +2221,37 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 	scene_node_get_size(node, &dst_box.width, &dst_box.height);
 	transform_output_box(&dst_box, data);
 
+	// When using fractional scaling, scale_box() rounds the destination size
+	// to integer pixels. If a client renders its buffer at the exact output
+	// scale (e.g. via wp_fractional_scale_v1), this rounding can cause a ±1px
+	// mismatch between dst_box dimensions and the actual buffer pixel count.
+	// The GPU then resamples (bilinear filter) to fit, blurring subpixel-
+	// hinted text. Fix: snap dst_box dimensions to the buffer dimensions when
+	// they're within 1px, avoiding the resample entirely.
+	if (node->type == WLR_SCENE_NODE_BUFFER) {
+		struct wlr_scene_buffer *sb = wlr_scene_buffer_from_node(node);
+		if (sb->dst_width > 0 && sb->dst_height > 0 &&
+				sb->buffer_width > 0 && sb->buffer_height > 0) {
+			int bw = sb->buffer_width;
+			int bh = sb->buffer_height;
+			if (!wlr_fbox_empty(&sb->src_box)) {
+				struct wlr_fbox sbox = sb->src_box;
+				wlr_fbox_transform(&sbox, &sbox, sb->transform,
+					sb->buffer_width, sb->buffer_height);
+				bw = round(sbox.width);
+				bh = round(sbox.height);
+			} else {
+				wlr_output_transform_coords(sb->transform, &bw, &bh);
+			}
+			wlr_output_transform_coords(data->transform, &bw, &bh);
+			
+			if (abs(dst_box.width - bw) <= 1 && abs(dst_box.height - bh) <= 1) {
+				dst_box.width = bw;
+				dst_box.height = bh;
+			}
+		}
+	}
+
 	pixman_region32_t opaque;
 	pixman_region32_init(&opaque);
 	scene_node_opaque_region(node, x, y, &opaque);
@@ -2380,59 +2411,20 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 		float luminance_multiplier = get_luminance_multiplier(&src_lum, &srgb_lum);
 		luminance_multiplier *= scene_buffer->luminance_multiplier;
 
-		// A destination extent is derived from logical edges, so it can differ
-		// from the source extent by a fraction of a texel (a clip to XDG
-		// geometry under fractional scale) or by one whole texel (a client that
-		// renders at the exact output scale through wp_fractional_scale_v1).
-		// Either one makes every fragment sample between two texels through
-		// GL_LINEAR, which blurs subpixel-hinted text across the whole surface.
-		// Snap the source box to integer texels, then adopt the destination
-		// extent when it is within one texel, so sampling is exactly 1:1.
-		//
-		// The destination box itself is never resized to the buffer: it is the
-		// compositor's layout geometry, and shrinking it uncovers a row of
-		// pixels that no other node paints, such as the content hole punched
-		// through a border.
-		struct wlr_fbox src_box = scene_buffer->src_box;
-		if (wlr_fbox_empty(&src_box)) {
-			src_box.width = texture->width;
-			src_box.height = texture->height;
-		}
-		const double src_x2 = src_box.x + src_box.width;
-		const double src_y2 = src_box.y + src_box.height;
-
-		// Whole texels the source region owns. Snapping outward would pull in a
-		// texel the client painted for something else, which for a
-		// client-side-decorated window is its transparent shadow margin: exactly
-		// the line of background this avoids.
-		struct wlr_fbox sample_box = {
-			.x = ceil(src_box.x),
-			.y = ceil(src_box.y),
-			.width = floor(src_x2) - ceil(src_box.x),
-			.height = floor(src_y2) - ceil(src_box.y),
-		};
-		if (sample_box.width < 1.0 || sample_box.height < 1.0) {
-			sample_box = (struct wlr_fbox){0};
-		}
-
-		struct wlr_fbox snapped_src_box = {
-			.x = round(src_box.x),
-			.y = round(src_box.y),
-			.width = round(src_x2) - round(src_box.x),
-			.height = round(src_y2) - round(src_box.y),
-		};
-
-		// Destination extents in buffer axes: a rotated output swaps them.
-		int src_dst_width = dst_box.width;
-		int src_dst_height = dst_box.height;
-		wlr_output_transform_coords(transform, &src_dst_width, &src_dst_height);
-		if (src_dst_width > 0 &&
-				fabs(snapped_src_box.width - src_dst_width) <= 1.0) {
-			snapped_src_box.width = src_dst_width;
-		}
-		if (src_dst_height > 0 &&
-				fabs(snapped_src_box.height - src_dst_height) <= 1.0) {
-			snapped_src_box.height = src_dst_height;
+		// When clipping (e.g. to XDG geometry for CSD), wlroots'
+		// surface_reconfigure computes src_box with fractional texel
+		// coordinates.  With GL_LINEAR filtering, fractional coordinates
+		// cause every fragment to sample between two texels, producing a
+		// uniform blur across the entire surface.  Snap src_box to integer
+		// texel boundaries so sampling hits exact texel centers.
+		struct wlr_fbox snapped_src_box = scene_buffer->src_box;
+		if (!wlr_fbox_empty(&snapped_src_box)) {
+			double x2 = snapped_src_box.x + snapped_src_box.width;
+			double y2 = snapped_src_box.y + snapped_src_box.height;
+			snapped_src_box.x = round(snapped_src_box.x);
+			snapped_src_box.y = round(snapped_src_box.y);
+			snapped_src_box.width = round(x2) - snapped_src_box.x;
+			snapped_src_box.height = round(y2) - snapped_src_box.y;
 		}
 
 		struct fx_render_texture_options tex_options = {
@@ -2458,7 +2450,6 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 			.clip_box = &dst_box,
 			.corners = fx_corner_radii_scale(buffer_corners, data->scale),
 			.clipped_region = {0},
-			.sample_box = sample_box,
 		};
 
 		// TODO: Use the base wlr_render_pass_add_texture as a fast-path in the future
