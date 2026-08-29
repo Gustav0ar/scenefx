@@ -1233,7 +1233,8 @@ void fx_render_pass_add_box_shadow(struct fx_gles_render_pass *pass,
 
 // Renders the blur for each damaged rect and swaps the buffer
 static void render_blur_segments(struct fx_gles_render_pass *pass,
-		struct fx_render_blur_pass_options *fx_options, struct blur_shader* shader) {
+		struct fx_render_blur_pass_options *fx_options, struct blur_shader* shader,
+		int sample_divisor) {
 	struct fx_render_texture_options *tex_options = &fx_options->tex_options;
 	struct wlr_render_texture_options *options = &tex_options->base;
 	struct fx_renderer *renderer = pass->buffer->renderer;
@@ -1285,6 +1286,17 @@ static void render_blur_segments(struct fx_gles_render_pass *pass,
 
 	glUniform1i(shader->tex, 0);
 	glUniform1f(shader->radius, blur_data->radius);
+	// Reduced blur levels occupy the top-left of full-size textures. Clamp to
+	// that level's edge texels so the kernel never samples the unused remainder.
+	const int sample_width = options->texture->width / sample_divisor
+		+ (options->texture->width % sample_divisor != 0);
+	const int sample_height = options->texture->height / sample_divisor
+		+ (options->texture->height % sample_divisor != 0);
+	glUniform4f(shader->sample_bounds,
+			0.5f / options->texture->width,
+			0.5f / options->texture->height,
+			(sample_width - 0.5f) / options->texture->width,
+			(sample_height - 0.5f) / options->texture->height);
 
 	if (shader == &renderer->shaders.blur1) {
 		glUniform2f(shader->halfpixel,
@@ -1461,14 +1473,14 @@ static struct fx_framebuffer *get_main_buffer_blur(struct fx_gles_render_pass *p
 	// Downscale
 	for (int i = 0; i < blur_data.num_passes; ++i) {
 		wlr_region_scale(&scaled_damage, &damage, 1.0f / (1 << (i + 1)));
-		render_blur_segments(pass, fx_options, &renderer->shaders.blur1);
+		render_blur_segments(pass, fx_options, &renderer->shaders.blur1, 1 << i);
 	}
 
 	// Upscale
 	for (int i = blur_data.num_passes - 1; i >= 0; --i) {
 		// when upsampling we make the region twice as big
 		wlr_region_scale(&scaled_damage, &damage, 1.0f / (1 << i));
-		render_blur_segments(pass, fx_options, &renderer->shaders.blur2);
+		render_blur_segments(pass, fx_options, &renderer->shaders.blur2, 1 << (i + 1));
 	}
 
 	pixman_region32_fini(&scaled_damage);

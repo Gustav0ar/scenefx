@@ -385,6 +385,7 @@ bool link_blur1_program(struct blur_shader *shader) {
 	shader->tex_proj = glGetUniformLocation(prog, "tex_proj");
 	shader->radius = glGetUniformLocation(prog, "radius");
 	shader->halfpixel = glGetUniformLocation(prog, "halfpixel");
+	shader->sample_bounds = glGetUniformLocation(prog, "sample_bounds");
 
 	return true;
 }
@@ -401,6 +402,7 @@ bool link_blur2_program(struct blur_shader *shader) {
 	shader->tex_proj = glGetUniformLocation(prog, "tex_proj");
 	shader->radius = glGetUniformLocation(prog, "radius");
 	shader->halfpixel = glGetUniformLocation(prog, "halfpixel");
+	shader->sample_bounds = glGetUniformLocation(prog, "sample_bounds");
 
 	return true;
 }
