@@ -22,3 +22,13 @@ foreach case_name : [
 		args: case_name,
 	)
 endforeach
+
+renderer_test = executable(
+	'renderer-test',
+	'renderer.c',
+	dependencies: scenefx_deps,
+	include_directories: [scenefx_inc, include_directories('..')],
+	link_with: lib_scenefx,
+)
+
+test('renderer-gbm-device', renderer_test)
