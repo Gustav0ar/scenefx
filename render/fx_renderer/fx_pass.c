@@ -1408,6 +1408,7 @@ static struct fx_framebuffer *get_main_buffer_blur(struct fx_gles_render_pass *p
 		return NULL;
 	}
 	fx_options->blur_data = &blur_data;
+	fx_options->tex_options.base.transform = WL_OUTPUT_TRANSFORM_NORMAL;
 
 	// The clip and current buffer are already in physical render-target
 	// coordinates. The incoming transform belongs to the optional surface mask
